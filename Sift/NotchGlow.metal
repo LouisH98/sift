@@ -13,6 +13,13 @@ struct NotchGlowVertexOut {
     float2 unitPosition;
 };
 
+struct NotchProcessingUniforms {
+    float4 sizeTimeShape;
+    float4 state;
+    float4 shape;
+    float4 glowColor;
+};
+
 vertex NotchGlowVertexOut notchGlowVertex(uint vertexID [[vertex_id]]) {
     constexpr float2 positions[4] = {
         float2(-1.0, 1.0),
@@ -42,6 +49,285 @@ static float segmentDistance(float2 point, float2 start, float2 end) {
 static float roundedBoxDistance(float2 point, float2 center, float2 halfSize, float radius) {
     float2 q = abs(point - center) - (halfSize - float2(radius));
     return length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+}
+
+static float quadraticValue(float start, float control, float end, float progress) {
+    float inverse = 1.0 - progress;
+    return (inverse * inverse * start) + (2.0 * inverse * progress * control) + (progress * progress * end);
+}
+
+static float2 quadraticPoint(float2 start, float2 control, float2 end, float progress) {
+    return float2(
+        quadraticValue(start.x, control.x, end.x, progress),
+        quadraticValue(start.y, control.y, end.y, progress)
+    );
+}
+
+static float2 processingContourSample(int index, float2 size, float topRadiusInput, float bottomRadiusInput) {
+    float maximumRadius = max(0.0, min(size.x * 0.5, size.y * 0.5));
+    float topRadius = min(topRadiusInput, maximumRadius);
+    float bottomRadius = min(bottomRadiusInput, maximumRadius);
+    float2 start = float2(0.0, 0.0);
+    float2 leftTopEnd = float2(topRadius, topRadius);
+    float2 leftBottomStart = float2(topRadius, size.y - bottomRadius);
+    float2 leftBottomEnd = float2(topRadius + bottomRadius, size.y);
+    float2 rightBottomStart = float2(size.x - topRadius - bottomRadius, size.y);
+    float2 rightBottomEnd = float2(size.x - topRadius, size.y - bottomRadius);
+    float2 rightTopStart = float2(size.x - topRadius, topRadius);
+
+    if (index <= 0) {
+        return start;
+    }
+    if (index <= 8) {
+        return quadraticPoint(start, float2(topRadius, 0.0), leftTopEnd, float(index) / 8.0);
+    }
+    if (index == 9) {
+        return leftBottomStart;
+    }
+    if (index <= 17) {
+        return quadraticPoint(leftBottomStart, float2(topRadius, size.y), leftBottomEnd, float(index - 9) / 8.0);
+    }
+    if (index == 18) {
+        return rightBottomStart;
+    }
+    if (index <= 26) {
+        return quadraticPoint(rightBottomStart, float2(size.x - topRadius, size.y), rightBottomEnd, float(index - 18) / 8.0);
+    }
+    if (index == 27) {
+        return rightTopStart;
+    }
+
+    return quadraticPoint(rightTopStart, float2(size.x - topRadius, 0.0), float2(size.x, 0.0), float(index - 27) / 8.0);
+}
+
+static float2 processingContourMetrics(float2 position, float2 size, float topRadius, float bottomRadius) {
+    float walkedLength = 0.0;
+    float closestDistance = 9999.0;
+    float closestWalkedLength = 0.0;
+    float2 previous = processingContourSample(0, size, topRadius, bottomRadius);
+
+    for (int index = 1; index < 36; index++) {
+        float2 current = processingContourSample(index, size, topRadius, bottomRadius);
+        float2 segment = current - previous;
+        float segmentLength = max(length(segment), 0.0001);
+        float t = clamp(dot(position - previous, segment) / max(dot(segment, segment), 0.0001), 0.0, 1.0);
+        float distance = length(position - (previous + (segment * t)));
+
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            closestWalkedLength = walkedLength + (segmentLength * t);
+        }
+
+        walkedLength += segmentLength;
+        previous = current;
+    }
+
+    float closestProgress = closestWalkedLength / max(walkedLength, 0.0001);
+
+    return float2(closestDistance, closestProgress);
+}
+
+static float rangeMask(float progress, float start, float end, float feather) {
+    return smoothstep(start - feather, start + feather, progress)
+        * (1.0 - smoothstep(end - feather, end + feather, progress));
+}
+
+static float rangeFade(float progress, float start, float end) {
+    float width = max(end - start, 0.0001);
+    float center = (start + end) * 0.5;
+    return clamp(1.0 - (abs(progress - center) / (width * 0.5)), 0.0, 1.0);
+}
+
+static float4 processingBounceRange(float phase, float segmentLength) {
+    float position = clamp(phase, 0.0, 1.0);
+    float compressedLength = segmentLength * 0.56;
+    float travelDuration = 0.38;
+    float squeezeDuration = 0.06;
+    float recoverDuration = 0.06;
+    float start = 0.0;
+    float end = segmentLength;
+
+    if (position < travelDuration) {
+        float progress = position / travelDuration;
+        start = progress * (1.0 - segmentLength);
+        end = start + segmentLength;
+    } else if (position < travelDuration + squeezeDuration) {
+        float progress = smoothstep(0.0, 1.0, (position - travelDuration) / squeezeDuration);
+        start = mix(1.0 - segmentLength, 1.0 - compressedLength, progress);
+        end = 1.0;
+    } else if (position < travelDuration + squeezeDuration + recoverDuration) {
+        float progress = smoothstep(0.0, 1.0, (position - travelDuration - squeezeDuration) / recoverDuration);
+        start = mix(1.0 - compressedLength, 1.0 - segmentLength, progress);
+        end = 1.0;
+    } else if (position >= 0.5 && position < 0.5 + travelDuration) {
+        float progress = (position - 0.5) / travelDuration;
+        end = mix(1.0, segmentLength, progress);
+        start = end - segmentLength;
+    } else if (position >= 0.5 + travelDuration && position < 0.5 + travelDuration + squeezeDuration) {
+        float progress = smoothstep(0.0, 1.0, (position - 0.5 - travelDuration) / squeezeDuration);
+        end = mix(segmentLength, compressedLength, progress);
+        start = 0.0;
+    } else {
+        float progress = smoothstep(0.0, 1.0, (position - 0.5 - travelDuration - squeezeDuration) / recoverDuration);
+        end = mix(compressedLength, segmentLength, progress);
+        start = 0.0;
+    }
+
+    return float4(start, end, 0.0, 0.0);
+}
+
+static float processingClosedShapeMask(float2 position, float2 size, float topRadiusInput, float bottomRadiusInput, float blurRadius) {
+    float maximumRadius = max(0.0, min(size.x * 0.5, size.y * 0.5));
+    float topRadius = min(topRadiusInput, maximumRadius);
+    float bottomRadius = min(bottomRadiusInput, maximumRadius);
+    float2 center = float2(size.x * 0.5, size.y * 0.5);
+    float2 halfSize = size * 0.5;
+    float distance = roundedBoxDistance(position, center, halfSize, max(topRadius, bottomRadius) * 0.72);
+    return smoothstep(blurRadius, -blurRadius, distance);
+}
+
+static float4 notchProcessingSample(
+    float2 position,
+    float2 size,
+    float isDistilling,
+    float queuedOpacity,
+    float completionProgress,
+    float tracerPhase,
+    float topRadius,
+    float bottomRadius,
+    float segmentLength,
+    float3 inputColor,
+    float edrGain
+) {
+    float3 baseColor = clamp(inputColor, 0.0, 1.0);
+    float3 outputColor = float3(0.0);
+    float outputAlpha = 0.0;
+
+    if (queuedOpacity > 0.001) {
+        float radius = length(position - float2(size.x * 0.5, size.y));
+        float radial = 0.0;
+        if (radius < 2.0) {
+            radial = 1.0;
+        } else if (radius < 67.0) {
+            radial = mix(1.0, 0.36, (radius - 2.0) / 65.0);
+        } else if (radius < 132.0) {
+            radial = mix(0.36, 0.0, (radius - 67.0) / 65.0);
+        }
+
+        float shapeMask = processingClosedShapeMask(position, size, topRadius, bottomRadius, 9.0);
+        float alpha = radial * 0.18 * queuedOpacity * shapeMask;
+        outputColor += baseColor * alpha;
+        outputAlpha = max(outputAlpha, alpha);
+    }
+
+    float2 contour = processingContourMetrics(position, size, topRadius, bottomRadius);
+    float distance = contour.x;
+    float progress = contour.y;
+
+    if (isDistilling > 0.001) {
+        float4 range = processingBounceRange(tracerPhase, segmentLength);
+        float mask = rangeMask(progress, range.x, range.y, 0.006);
+        float coreFade = rangeFade(progress, range.x, range.y);
+        float opacity = 0.92 * isDistilling;
+
+        float wideGlow = exp(-pow(max(distance - 2.7, 0.0) / 4.6, 2.0)) * mask * opacity * 0.30;
+        float midGlow = exp(-pow(max(distance - 0.9, 0.0) / 0.9, 2.0)) * mask * opacity * 0.56;
+        float core = smoothstep(0.56, 0.18, distance) * mask * coreFade * opacity;
+
+        outputColor += baseColor * (wideGlow + midGlow);
+        outputColor += float3(1.0) * core;
+        outputAlpha = max(outputAlpha, clamp(wideGlow + midGlow + core, 0.0, 1.0));
+    }
+
+    float completionOpacity = max(0.0, 1.0 - completionProgress);
+    if (completionOpacity > 0.001) {
+        float lineWidth = 1.0 + (completionProgress * 6.0);
+        float blurRadius = 8.0 + (completionProgress * 10.0);
+        float glow = exp(-pow(max(distance - (lineWidth * 0.5), 0.0) / blurRadius, 2.0)) * completionOpacity * 0.45;
+        float coreWidth = max(0.6, 1.6 - completionProgress);
+        float core = smoothstep(coreWidth * 0.5 + 0.44, coreWidth * 0.5 - 0.1, distance) * completionOpacity * 0.56;
+
+        outputColor += baseColor * glow;
+        outputColor += float3(1.0) * core;
+        outputAlpha = max(outputAlpha, clamp(glow + core, 0.0, 1.0));
+    }
+
+    return float4(outputColor * edrGain, clamp(outputAlpha, 0.0, 1.0));
+}
+
+static float4 topEdgeLineGlowSample(
+    float2 position,
+    float2 size,
+    float strength,
+    float time,
+    float3 inputColor,
+    float2 notchSize,
+    float edrGain,
+    float topOffsetInput
+);
+
+static float4 topEdgeProcessingSample(
+    float2 position,
+    float2 size,
+    float time,
+    float isDistilling,
+    float queuedOpacity,
+    float completionProgress,
+    float tracerPhase,
+    float3 inputColor,
+    float edrGain
+) {
+    float width = size.x;
+    float height = size.y;
+    float3 baseColor = clamp(inputColor, 0.0, 1.0);
+    float3 outputColor = float3(0.0);
+    float outputAlpha = 0.0;
+    float yCenter = height * 0.5;
+
+    if (isDistilling > 0.001) {
+        float trackWidth = min(width * 0.68, 250.0);
+        float4 range = processingBounceRange(tracerPhase, 0.24);
+        float segmentWidth = max(22.0, (range.y - range.x) * trackWidth);
+        float segmentLeft = ((width - trackWidth) * 0.5) + (range.x * trackWidth);
+        float segmentRight = segmentLeft + segmentWidth;
+        float segmentCenter = (segmentLeft + segmentRight) * 0.5;
+        float normalizedX = (position.x - segmentCenter) / max(segmentWidth * 0.5, 1.0);
+        float segmentMask = smoothstep(segmentLeft - 0.5, segmentLeft + 2.0, position.x)
+            * (1.0 - smoothstep(segmentRight - 2.0, segmentRight + 0.5, position.x));
+        float gradient = max(0.0, 1.0 - abs(normalizedX));
+        float taper = pow(gradient, 0.62);
+        float coreThickness = mix(0.10, 0.44, taper);
+        float haloY = exp(-pow(abs(position.y - yCenter) / 1.2, 2.0));
+        float coreY = exp(-pow(abs(position.y - yCenter) / coreThickness, 2.0));
+        float colorGlow = gradient * haloY * segmentMask * 0.42 * isDistilling;
+        float colorCore = taper * coreY * segmentMask * 0.52 * isDistilling;
+        float whiteCore = pow(taper, 0.76) * coreY * segmentMask * 0.78 * isDistilling;
+
+        outputColor += baseColor * (colorGlow + colorCore);
+        outputColor += float3(1.0) * whiteCore;
+        outputAlpha = max(outputAlpha, clamp(colorGlow + colorCore + whiteCore, 0.0, 1.0));
+    }
+
+    float completionOpacity = max(0.0, 1.0 - completionProgress);
+    if (completionOpacity > 0.001) {
+        float flashStrength = pow(completionOpacity, 1.18) * 0.72;
+        float2 flashSize = float2(min(width * 0.54, 170.0), 6.2);
+        float4 flash = topEdgeLineGlowSample(
+            position,
+            size,
+            flashStrength,
+            time,
+            inputColor,
+            flashSize,
+            edrGain,
+            0.0
+        );
+
+        outputColor += flash.rgb / max(edrGain, 0.0001);
+        outputAlpha = max(outputAlpha, flash.a);
+    }
+
+    return float4(outputColor * edrGain, clamp(outputAlpha, 0.0, 1.0));
 }
 
 static float4 topEdgeLineGlowSample(
@@ -296,6 +582,46 @@ fragment half4 notchGlowFragment(
             uniforms.shape.x,
             uniforms.shape.y,
             uniforms.shape.z
+        );
+    }
+
+    return half4(color);
+}
+
+fragment half4 notchProcessingFragment(
+    NotchGlowVertexOut in [[stage_in]],
+    constant NotchProcessingUniforms &uniforms [[buffer(0)]]
+) {
+    float2 size = uniforms.sizeTimeShape.xy;
+    float2 position = in.unitPosition * size;
+    float shape = uniforms.sizeTimeShape.w;
+    float4 color;
+
+    if (shape > 0.5) {
+        color = topEdgeProcessingSample(
+            position,
+            size,
+            uniforms.sizeTimeShape.z,
+            uniforms.state.x,
+            uniforms.state.y,
+            uniforms.state.z,
+            uniforms.state.w,
+            uniforms.glowColor.rgb,
+            uniforms.glowColor.w
+        );
+    } else {
+        color = notchProcessingSample(
+            position,
+            size,
+            uniforms.state.x,
+            uniforms.state.y,
+            uniforms.state.z,
+            uniforms.state.w,
+            uniforms.shape.x,
+            uniforms.shape.y,
+            uniforms.shape.z,
+            uniforms.glowColor.rgb,
+            uniforms.glowColor.w
         );
     }
 

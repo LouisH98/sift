@@ -131,7 +131,7 @@ struct NotchView: View {
                                     state: processor.notchProcessingState,
                                     topCornerRadius: topCornerRadius,
                                     bottomCornerRadius: bottomCornerRadius,
-                                    glowColor: appearanceSettings.glowColor,
+                                    metalGlowColor: appearanceSettings.nsGlowColor,
                                     motionDurationScale: model.isOpen ? 1.85 : 1
                                 )
                                 .allowsHitTesting(false)
