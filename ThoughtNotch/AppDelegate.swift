@@ -19,7 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var shortcutChangeObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(.regular)
         PageNavigationShortcut.deactivateRegisteredShortcuts()
 
         KeyboardShortcuts.onKeyDown(for: .toggleNotch) { [weak self] in
