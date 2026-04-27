@@ -1,0 +1,59 @@
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: Build macOS app
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      DERIVED_DATA_PATH: build/DerivedData
+      APP_PATH: build/DerivedData/Build/Products/Debug/Sift.app
+      ZIP_PATH: build/Sift-Debug.zip
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Sift.xcodeproj \
+            -scheme Sift \
+            -derivedDataPath "$DERIVED_DATA_PATH"
+
+      - name: Build Sift
+        run: |
+          xcodebuild build \
+            -project Sift.xcodeproj \
+            -scheme Sift \
+            -configuration Debug \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Package app
+        run: ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sift-Debug
+          path: ${{ env.ZIP_PATH }}
+          if-no-files-found: error
