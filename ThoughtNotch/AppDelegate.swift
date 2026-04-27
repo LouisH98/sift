@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         PageNavigationShortcut.deactivateRegisteredShortcuts()
+        ActionReminderScheduler.shared.syncAll(actionItems: store.openActionItems, settings: TodoSettings.shared)
 
         KeyboardShortcuts.onKeyDown(for: .toggleNotch) { [weak self] in
             Task { @MainActor in
@@ -122,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func openSettings() {
         if settingsWindowController == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 460, height: 360),
+                contentRect: NSRect(x: 0, y: 0, width: 460, height: 430),
                 styleMask: [.titled, .closable, .miniaturizable],
                 backing: .buffered,
                 defer: false

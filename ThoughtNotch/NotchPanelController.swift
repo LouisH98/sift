@@ -196,7 +196,7 @@ final class NotchPanelController {
             actionNavigationModel.moveSelection(-1, in: store.openActionItems)
         case 125:
             actionNavigationModel.moveSelection(1, in: store.openActionItems)
-        case 36, 76:
+        case 36, 49, 76:
             actionNavigationModel.completeSelected(in: store.openActionItems, store: store)
         default:
             return false

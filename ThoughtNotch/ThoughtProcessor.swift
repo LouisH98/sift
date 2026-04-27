@@ -129,12 +129,19 @@ final class ThoughtProcessor: ObservableObject {
             "title: \($0.title)\nsummary: \($0.summary)\nhighlights: \($0.highlights.joined(separator: "; "))"
         } ?? "No digest for this day yet."
 
+        let now = Date()
+        let timeZone = TimeZone.current
         let prompt = """
         New thought:
         id: \(thought.id.uuidString)
-        createdAt: \(ISO8601DateFormatter().string(from: thought.createdAt))
+        createdAt: \(DateFormatter.promptISO8601.string(from: thought.createdAt))
         raw: \(thought.text)
         themeHint: \(thought.themeHint ?? "None")
+
+        Current date context:
+        now: \(DateFormatter.promptISO8601.string(from: now))
+        timeZone: \(timeZone.identifier)
+        locale: \(Locale.current.identifier)
 
         Recent thoughts:
         \(recentThoughts.isEmpty ? "None" : recentThoughts)
@@ -161,6 +168,11 @@ final class ThoughtProcessor: ObservableObject {
         - Use linkedThoughtIds only from Recent thoughts.
         - Create actionItems only when the thought implies a concrete task, follow-up, decision, or reminder.
         - Keep action item titles short and imperative.
+        - For each action item, set dueAt to an ISO-8601 date-time with timezone when the thought contains an explicit or strongly inferable due date/time.
+        - Resolve relative due phrases like today, tomorrow, Friday, EOD, end of day, tonight, this afternoon, and next week using the current date context and local timezone.
+        - Interpret EOD/end of day as 17:00 local time unless the thought gives a different time.
+        - If a due date is inferable but no time is stated, choose the most useful local time for that phrase rather than midnight.
+        - Leave dueAt empty when there is no due date/time signal.
         - If classification is todo and there is no reusable notebook context, leave pageId empty but still provide concise page fields.
         """
 
@@ -523,6 +535,14 @@ final class ThoughtProcessor: ObservableObject {
 }
 
 private extension DateFormatter {
+    static let promptISO8601: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssXXXXX"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        return formatter
+    }()
+
     static let actionDate: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"

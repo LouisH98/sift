@@ -467,7 +467,7 @@ struct OpenAIClient {
         {
           "title": "Follow up with Sam",
           "detail": "Ask Sam about the launch plan.",
-          "dueAt": ""
+          "dueAt": "2026-05-01T17:00:00+01:00"
         }
       ]
     }
@@ -591,7 +591,7 @@ struct OpenAIClient {
                         "detail": ["type": "string"],
                         "dueAt": [
                             "type": "string",
-                            "description": "ISO-8601 date if explicitly inferable, otherwise empty string."
+                            "description": "ISO-8601 date-time with timezone if explicitly or strongly inferable from the thought and date context, otherwise empty string."
                         ]
                     ]
                 ]

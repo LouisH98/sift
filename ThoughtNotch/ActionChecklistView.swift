@@ -209,8 +209,21 @@ private struct ActionRow: View {
                         .lineLimit(1)
                 }
 
-                if let sourceThought {
-                    Text(sourceThought.title ?? sourceThought.text)
+                if let dueAt = item.dueAt {
+                    HStack(spacing: 5) {
+                        Image(systemName: dueIconName(for: dueAt))
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(dueIconColor(for: dueAt))
+
+                        Text(DateFormatter.actionDueDate.string(from: dueAt))
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(dueTextColor(for: dueAt))
+                    }
+                        .lineLimit(1)
+                }
+
+                if let sourceText {
+                    Text(sourceText)
                         .font(.caption2)
                         .foregroundStyle(isCompleting ? .green.opacity(0.36) : .white.opacity(0.34))
                         .lineLimit(1)
@@ -235,6 +248,76 @@ private struct ActionRow: View {
             onComplete()
         }
     }
+
+    private var sourceText: String? {
+        guard let sourceThought else {
+            return nil
+        }
+
+        let text = sourceThought.title ?? sourceThought.text
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        let normalizedSource = normalizedComparisonText(text)
+        let normalizedTitle = normalizedComparisonText(item.title)
+        let normalizedDetail = item.detail.map(normalizedComparisonText) ?? ""
+
+        guard !normalizedSource.isEmpty else {
+            return nil
+        }
+
+        if normalizedSource == normalizedTitle || normalizedSource == normalizedDetail {
+            return nil
+        }
+
+        if !normalizedTitle.isEmpty, normalizedSource.contains(normalizedTitle) {
+            return nil
+        }
+
+        if !normalizedDetail.isEmpty, normalizedDetail.contains(normalizedSource) {
+            return nil
+        }
+
+        return text
+    }
+
+    private func dueIconName(for dueAt: Date) -> String {
+        dueAt < Date() ? "exclamationmark.circle.fill" : "clock"
+    }
+
+    private func dueIconColor(for dueAt: Date) -> Color {
+        if isCompleting {
+            return .green.opacity(0.48)
+        }
+
+        return dueAt < Date() ? .red.opacity(0.82) : .white.opacity(0.5)
+    }
+
+    private func dueTextColor(for dueAt: Date) -> Color {
+        if isCompleting {
+            return .green.opacity(0.56)
+        }
+
+        return dueAt < Date() ? .red.opacity(0.82) : .teal.opacity(0.72)
+    }
+
+    private func normalizedComparisonText(_ text: String) -> String {
+        text
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+}
+
+private extension DateFormatter {
+    static let actionDueDate: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
 }
 
 private struct ActionKeyboardCatcher: NSViewRepresentable {
@@ -280,7 +363,7 @@ private struct ActionKeyboardCatcher: NSViewRepresentable {
                 onMove?(-1)
             case 125:
                 onMove?(1)
-            case 36, 76:
+            case 36, 49, 76:
                 onComplete?()
             case 53:
                 onCancel?()

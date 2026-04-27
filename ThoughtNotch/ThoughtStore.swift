@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import UserNotifications
 
 @MainActor
 final class ThoughtStore: ObservableObject {
@@ -41,7 +42,7 @@ final class ThoughtStore: ObservableObject {
     var openActionItems: [ActionItem] {
         actionItems
             .filter { !$0.isDone }
-            .sorted { $0.createdAt > $1.createdAt }
+            .sorted(by: actionItemSort)
     }
 
     var unprocessedThoughtCount: Int {
@@ -229,6 +230,10 @@ final class ThoughtStore: ObservableObject {
             return
         }
 
+        let removedActionItemIDs = actionItems
+            .filter { $0.thoughtID == id }
+            .map(\.id)
+
         thoughts.removeAll { $0.id == id }
         actionItems.removeAll { $0.thoughtID == id }
 
@@ -259,6 +264,7 @@ final class ThoughtStore: ObservableObject {
         saveActionItems()
         saveDailyDigests()
         savePages()
+        ActionReminderScheduler.shared.cancel(actionItemIDs: removedActionItemIDs)
     }
 
     func applyReorganizationProposal(_ proposal: ReorganizationProposal) {
@@ -369,8 +375,9 @@ final class ThoughtStore: ObservableObject {
             actionItems.insert(item, at: 0)
         }
 
-        actionItems.sort { $0.createdAt > $1.createdAt }
+        actionItems.sort(by: actionItemSort)
         saveActionItems()
+        ActionReminderScheduler.shared.sync(actionItems: items, settings: TodoSettings.shared)
     }
 
     func setActionItemDone(_ id: UUID, isDone: Bool) {
@@ -381,6 +388,12 @@ final class ThoughtStore: ObservableObject {
         actionItems[index].isDone = isDone
         actionItems[index].completedAt = isDone ? Date() : nil
         saveActionItems()
+
+        if isDone {
+            ActionReminderScheduler.shared.cancel(actionItemIDs: [id])
+        } else {
+            ActionReminderScheduler.shared.sync(actionItems: [actionItems[index]], settings: TodoSettings.shared)
+        }
     }
 
     func digest(for day: Date) -> DailyDigest? {
@@ -403,7 +416,7 @@ final class ThoughtStore: ObservableObject {
         dailyDigests = loadArray(from: dailyDigestsURL, fallback: [])
             .sorted { $0.day > $1.day }
         actionItems = loadArray(from: actionItemsURL, fallback: [])
-            .sorted { $0.createdAt > $1.createdAt }
+            .sorted(by: actionItemSort)
 
         migrateThemesToPagesIfNeeded()
         backfillThoughtPrefixHintsIfNeeded()
@@ -664,4 +677,158 @@ final class ThoughtStore: ObservableObject {
 
         return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
     }
+}
+
+private func actionItemSort(_ lhs: ActionItem, _ rhs: ActionItem) -> Bool {
+    switch (lhs.dueAt, rhs.dueAt) {
+    case let (lhsDue?, rhsDue?):
+        if lhsDue != rhsDue {
+            return lhsDue < rhsDue
+        }
+    case (_?, nil):
+        return true
+    case (nil, _?):
+        return false
+    case (nil, nil):
+        break
+    }
+
+    return lhs.createdAt > rhs.createdAt
+}
+
+final class ActionReminderScheduler {
+    static let shared = ActionReminderScheduler()
+
+    private let notificationPrefix = "action-reminder-"
+
+    private init() {}
+
+    func sync(actionItems: [ActionItem], settings: TodoSettings) {
+        Task {
+            await schedule(actionItems: actionItems, settings: settings)
+        }
+    }
+
+    func syncAll(actionItems: [ActionItem], settings: TodoSettings) {
+        Task {
+            let center = UNUserNotificationCenter.current()
+            let pending = await center.pendingNotificationRequests()
+            let managedIdentifiers = pending
+                .map(\.identifier)
+                .filter { $0.hasPrefix(notificationPrefix) }
+
+            center.removePendingNotificationRequests(withIdentifiers: managedIdentifiers)
+            await schedule(actionItems: actionItems, settings: settings)
+        }
+    }
+
+    func cancel(actionItemIDs: [UUID]) {
+        let identifiers = actionItemIDs.map { notificationIdentifier(for: $0) }
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+
+    private func schedule(actionItems: [ActionItem], settings: TodoSettings) async {
+        let enabled = await MainActor.run { settings.remindersEnabled }
+        let leadTimeMinutes = await MainActor.run { settings.reminderLeadTimeMinutes }
+        guard enabled else {
+            cancel(actionItemIDs: actionItems.map(\.id))
+            return
+        }
+
+        let schedulableItems = actionItems.filter { !$0.isDone && $0.dueAt != nil }
+        guard !schedulableItems.isEmpty else {
+            return
+        }
+
+        let isAuthorized = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false
+        guard isAuthorized else {
+            return
+        }
+
+        for item in schedulableItems {
+            await schedule(actionItem: item, leadTimeMinutes: leadTimeMinutes)
+        }
+    }
+
+    private func schedule(actionItem: ActionItem, leadTimeMinutes: Int) async {
+        guard let dueAt = actionItem.dueAt else {
+            return
+        }
+
+        let center = UNUserNotificationCenter.current()
+        let identifier = notificationIdentifier(for: actionItem.id)
+        let reminderAt = dueAt.addingTimeInterval(-TimeInterval(leadTimeMinutes * 60))
+        let now = Date()
+        let content = notificationContent(for: actionItem, dueAt: dueAt)
+
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+
+        guard reminderAt > now else {
+            await deliverImmediateReminderIfNeeded(
+                identifier: identifier,
+                content: content,
+                dueAt: dueAt,
+                now: now,
+                leadTimeMinutes: leadTimeMinutes
+            )
+            return
+        }
+
+        let dateComponents = Calendar.current.dateComponents(
+            [.year, .month, .day, .hour, .minute],
+            from: reminderAt
+        )
+        let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: false)
+        let request = UNNotificationRequest(
+            identifier: identifier,
+            content: content,
+            trigger: trigger
+        )
+
+        try? await center.add(request)
+    }
+
+    private func deliverImmediateReminderIfNeeded(
+        identifier: String,
+        content: UNNotificationContent,
+        dueAt: Date,
+        now: Date,
+        leadTimeMinutes: Int
+    ) async {
+        let leadTime = TimeInterval(leadTimeMinutes * 60)
+        guard dueAt.timeIntervalSince(now) <= leadTime else {
+            return
+        }
+
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications()
+        guard !delivered.contains(where: { $0.request.identifier == identifier }) else {
+            return
+        }
+
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        try? await center.add(request)
+    }
+
+    private func notificationContent(for actionItem: ActionItem, dueAt: Date) -> UNMutableNotificationContent {
+        let content = UNMutableNotificationContent()
+        content.title = "TODO due \(DateFormatter.actionReminderDueDate.string(from: dueAt))"
+        content.body = actionItem.title
+        content.sound = .default
+        content.userInfo = ["actionItemID": actionItem.id.uuidString]
+        return content
+    }
+
+    private func notificationIdentifier(for actionItemID: UUID) -> String {
+        "\(notificationPrefix)\(actionItemID.uuidString)"
+    }
+}
+
+private extension DateFormatter {
+    static let actionReminderDueDate: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
 }

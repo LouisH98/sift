@@ -105,3 +105,38 @@ final class AISettings: ObservableObject {
         apiKey = ""
     }
 }
+
+@MainActor
+final class TodoSettings: ObservableObject {
+    static let shared = TodoSettings()
+
+    private enum Keys {
+        static let remindersEnabled = "todo.remindersEnabled"
+        static let reminderLeadTimeMinutes = "todo.reminderLeadTimeMinutes"
+    }
+
+    @Published var remindersEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(remindersEnabled, forKey: Keys.remindersEnabled)
+        }
+    }
+
+    @Published var reminderLeadTimeMinutes: Int {
+        didSet {
+            let clamped = min(max(reminderLeadTimeMinutes, 0), 10_080)
+            if reminderLeadTimeMinutes != clamped {
+                reminderLeadTimeMinutes = clamped
+                return
+            }
+
+            UserDefaults.standard.set(reminderLeadTimeMinutes, forKey: Keys.reminderLeadTimeMinutes)
+        }
+    }
+
+    private init() {
+        let defaults = UserDefaults.standard
+        remindersEnabled = defaults.object(forKey: Keys.remindersEnabled) as? Bool ?? true
+        let storedLeadTime = defaults.object(forKey: Keys.reminderLeadTimeMinutes) as? Int
+        reminderLeadTimeMinutes = storedLeadTime ?? 60
+    }
+}

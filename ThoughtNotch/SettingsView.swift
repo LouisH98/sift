@@ -4,6 +4,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @StateObject private var settings = AISettings.shared
+    @StateObject private var todoSettings = TodoSettings.shared
     @StateObject private var processor = ThoughtProcessor.shared
     @ObservedObject private var store = ThoughtStore.shared
     @State private var availableModels: [String] = []
@@ -33,6 +34,22 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
+            }
+
+            Section("Actions") {
+                Toggle("Reminder notifications", isOn: $todoSettings.remindersEnabled)
+
+                Stepper(
+                    reminderStepperLabel,
+                    value: $todoSettings.reminderLeadTimeMinutes,
+                    in: 0...10_080,
+                    step: 15
+                )
+                .disabled(!todoSettings.remindersEnabled)
+
+                Text("Due actions are sorted before unscheduled actions.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("AI Processing") {
@@ -82,6 +99,41 @@ struct SettingsView: View {
         .onAppear {
             refreshLaunchAtLogin()
         }
+        .onChange(of: todoSettings.remindersEnabled) { _, _ in
+            syncActionReminders()
+        }
+        .onChange(of: todoSettings.reminderLeadTimeMinutes) { _, _ in
+            syncActionReminders()
+        }
+    }
+
+    private var reminderStepperLabel: String {
+        if todoSettings.reminderLeadTimeMinutes == 0 {
+            return "Remind at the due time"
+        }
+
+        return "Remind \(reminderLeadTimeLabel) before due"
+    }
+
+    private var reminderLeadTimeLabel: String {
+        let minutes = todoSettings.reminderLeadTimeMinutes
+        if minutes < 60 {
+            return "\(minutes) minutes"
+        }
+
+        if minutes.isMultiple(of: 1_440) {
+            let days = minutes / 1_440
+            return days == 1 ? "1 day" : "\(days) days"
+        }
+
+        if minutes.isMultiple(of: 60) {
+            let hours = minutes / 60
+            return hours == 1 ? "1 hour" : "\(hours) hours"
+        }
+
+        let hours = minutes / 60
+        let remainingMinutes = minutes % 60
+        return "\(hours)h \(remainingMinutes)m"
     }
 
     @ViewBuilder
@@ -181,5 +233,12 @@ struct SettingsView: View {
 
     private func refreshLaunchAtLogin() {
         launchAtLoginStatus = SMAppService.mainApp.status
+    }
+
+    private func syncActionReminders() {
+        ActionReminderScheduler.shared.syncAll(
+            actionItems: store.openActionItems,
+            settings: todoSettings
+        )
     }
 }
