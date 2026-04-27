@@ -69,6 +69,7 @@ struct SettingsView: View {
         .padding()
         .frame(width: 460)
         .task {
+            settings.loadAPIKeyIfNeeded()
             await loadModelsIfNeeded()
         }
         .onAppear {
@@ -135,6 +136,11 @@ struct SettingsView: View {
 
         guard URL(string: settings.apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) != nil else {
             modelLoadError = "Enter a valid API base URL to load models."
+            return
+        }
+
+        guard !settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            modelLoadError = "Enter an API key to load models."
             return
         }
 

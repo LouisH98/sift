@@ -39,6 +39,7 @@ enum OpenAIClientError: LocalizedError {
     }
 }
 
+@MainActor
 struct OpenAIClient {
     private let settings: AISettings
     private let session: URLSession
@@ -101,7 +102,7 @@ struct OpenAIClient {
 
     private func authenticatedRequest(url: URL) -> URLRequest {
         var request = URLRequest(url: url)
-        let apiKey = settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = settings.loadAPIKeyIfNeeded().trimmingCharacters(in: .whitespacesAndNewlines)
         if !apiKey.isEmpty {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
