@@ -81,6 +81,14 @@ stop_running_app() {
   /usr/bin/pkill -9 -x "$APP_EXECUTABLE" || true
 }
 
+sign_app() {
+  local app_path="$1"
+
+  echo "Signing $app_path..."
+  /usr/bin/codesign --force --deep --sign - "$app_path"
+  /usr/bin/codesign --verify --deep --strict "$app_path"
+}
+
 build_install_launch() {
   echo "Building $SCHEME ($CONFIGURATION)..."
   xcodebuild_args=(
@@ -112,6 +120,7 @@ build_install_launch() {
 
   echo "Installing to $DEST_APP..."
   /usr/bin/ditto "$BUILT_APP" "$DEST_APP"
+  sign_app "$DEST_APP"
 
   if [[ "$LAUNCH" != "0" ]]; then
     echo "Launching $DEST_APP..."

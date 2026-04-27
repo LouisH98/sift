@@ -38,5 +38,9 @@ fi
 echo "Installing to $DEST_APP..."
 /usr/bin/ditto "$BUILT_APP" "$DEST_APP"
 
+echo "Signing $DEST_APP..."
+/usr/bin/codesign --force --deep --sign - "$DEST_APP"
+/usr/bin/codesign --verify --deep --strict "$DEST_APP"
+
 echo "Done."
 echo "$DEST_APP"

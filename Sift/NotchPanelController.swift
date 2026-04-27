@@ -31,7 +31,7 @@ final class NotchPanelController {
 
     private let topBlurBleed: CGFloat = 32
     private let visibleWindowSize = NSSize(width: 640, height: 240)
-    private let activationHitSize = NSSize(width: 380, height: 78)
+    private let activationHitSize = NSSize(width: 430, height: 96)
     private let activationPanelSize = NSSize(width: 980, height: 220)
     private let fallbackClosedNotchSize = NSSize(width: 185, height: 32)
     private let topEdgePushThreshold: CGFloat = 34
@@ -85,7 +85,7 @@ final class NotchPanelController {
         PageNavigationShortcut.activateRegisteredShortcuts()
     }
 
-    func show(on sourceScreen: NSScreen? = nil) {
+    func show(on sourceScreen: NSScreen? = nil, activationGlowStrength: CGFloat = 0) {
         targetIsOpen = true
         pendingOrderOut?.cancel()
         pendingOrderOut = nil
@@ -106,6 +106,7 @@ final class NotchPanelController {
         } else {
             animationModel.updateClosedNotchSize(closedNotchSize)
         }
+        animationModel.prepareOpeningGlow(strength: activationGlowStrength)
 
         panel.setFrame(finalFrame, display: true)
         panel.alphaValue = 1
@@ -337,8 +338,12 @@ final class NotchPanelController {
 
         lastActivationClickAt = date
         resetTopEdgePush()
+        let activationGlowStrength = activationSurfaces
+            .first(where: { $0.screen == screen })?
+            .model
+            .glowStrengthForTransition ?? 0
         endActivationHover()
-        show(on: screen)
+        show(on: screen, activationGlowStrength: max(activationGlowStrength, 0.74))
     }
 
     private func updateActivationHover(at mouseLocation: NSPoint) {
@@ -743,6 +748,7 @@ final class NotchAnimationModel: ObservableObject {
     @Published var isBlurred = true
     @Published private(set) var isContentMounted = false
     @Published private(set) var isContentPresented = false
+    @Published private(set) var transitionGlowStrength: CGFloat = 0
     @Published var captureDraft = ""
     @Published var selectedPage: NotchPage = .capture
     @Published private(set) var hideClosedNotch = true
@@ -758,11 +764,16 @@ final class NotchAnimationModel: ObservableObject {
         isBlurred = true
         isContentMounted = false
         isContentPresented = false
+        transitionGlowStrength = 0
         selectedPage = .capture
     }
 
     func updateClosedNotchSize(_ closedNotchSize: CGSize) {
         self.closedNotchSize = closedNotchSize
+    }
+
+    func prepareOpeningGlow(strength: CGFloat) {
+        transitionGlowStrength = max(0, min(1, strength))
     }
 
     func open() {
@@ -772,6 +783,10 @@ final class NotchAnimationModel: ObservableObject {
 
         withAnimation(Self.openAnimation) {
             isOpen = true
+        }
+
+        withAnimation(Self.openingGlowAnimation.delay(0.02)) {
+            transitionGlowStrength = 0
         }
 
         withAnimation(Self.contentDismissalAnimation.delay(0.04)) {
@@ -821,6 +836,10 @@ final class NotchAnimationModel: ObservableObject {
 
     static var openAnimation: Animation {
         .interactiveSpring(response: 0.38, dampingFraction: 0.8, blendDuration: 0.12)
+    }
+
+    static var openingGlowAnimation: Animation {
+        .smooth(duration: 0.72)
     }
 
     static var closeAnimation: Animation {

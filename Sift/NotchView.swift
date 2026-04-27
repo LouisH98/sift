@@ -95,6 +95,20 @@ struct NotchView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
+            if appearanceSettings.isGlowEnabled {
+                NotchGlowField(
+                    strength: model.transitionGlowStrength,
+                    notchSize: currentSize,
+                    topCornerRadius: topCornerRadius,
+                    bottomCornerRadius: bottomCornerRadius,
+                    topOffset: topBlurBleed
+                )
+                .opacity(model.transitionGlowStrength > 0.01 ? 1 : 0)
+                .animation(NotchAnimationModel.openAnimation, value: model.isOpen)
+                .animation(NotchAnimationModel.openingGlowAnimation, value: model.transitionGlowStrength)
+                .allowsHitTesting(false)
+            }
+
             VStack(spacing: 0) {
                 VStack(spacing: 0) {
                     Rectangle()
@@ -136,10 +150,53 @@ struct NotchView: View {
                 .animation(NotchAnimationModel.blurAnimation, value: model.isBlurred)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+            if appearanceSettings.isGlowEnabled {
+                transitionEdgeGlow
+            }
         }
         .frame(width: 640, height: visibleStageHeight + topBlurBleed, alignment: .top)
         .compositingGroup()
         .preferredColorScheme(.dark)
+    }
+
+    private var transitionEdgeGlow: some View {
+        NotchShape(
+            topCornerRadius: topCornerRadius,
+            bottomCornerRadius: bottomCornerRadius
+        )
+        .stroke(
+            LinearGradient(
+                colors: [
+                    Color(red: 0.42, green: 0.78, blue: 1.0),
+                    .white,
+                    Color(red: 0.72, green: 0.42, blue: 1.0)
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            ),
+            style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round)
+        )
+        .frame(width: currentSize.width, height: currentSize.height)
+        .mask {
+            LinearGradient(
+                stops: [
+                    .init(color: .white.opacity(0.18), location: 0),
+                    .init(color: .white.opacity(0.52), location: 0.22),
+                    .init(color: .white, location: 0.52),
+                    .init(color: .white, location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        .shadow(color: Color(red: 0.48, green: 0.84, blue: 1.0).opacity(model.transitionGlowStrength * 0.44), radius: 5, x: -1, y: 1)
+        .shadow(color: Color(red: 0.72, green: 0.42, blue: 1.0).opacity(model.transitionGlowStrength * 0.34), radius: 7, x: 1, y: 1)
+        .opacity(model.transitionGlowStrength)
+        .offset(y: topBlurBleed)
+        .animation(NotchAnimationModel.openAnimation, value: model.isOpen)
+        .animation(NotchAnimationModel.openingGlowAnimation, value: model.transitionGlowStrength)
+        .allowsHitTesting(false)
     }
 
     @ViewBuilder
