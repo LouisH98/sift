@@ -163,8 +163,71 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
             )
             return ThoughtSynthesisOutput(synthesisMarkdown: response.content.synthesisMarkdown)
         } catch {
-            throw map(error)
+            guard isDecodingFailure(error) else {
+                throw map(error)
+            }
+
+            do {
+                let markdown = try await generateRawText(
+                    instructions: """
+                    You synthesize private notebook pages into concise markdown. Respond in English. Integrate the notes into a useful default page view, preserve uncertainty, and do not invent facts.
+                    """,
+                    prompt: input.prompt
+                )
+                return ThoughtSynthesisOutput(synthesisMarkdown: markdown)
+            } catch {
+                throw map(error)
+            }
         }
+    }
+
+    private func normalizedPageID(_ value: String) -> String {
+        let trimmed = clean(value)
+        guard let id = UUID(uuidString: trimmed), store.page(with: id) != nil else {
+            return ""
+        }
+
+        return id.uuidString
+    }
+
+    private func normalizedPageParentID(pageID: String, parentID: String) -> String {
+        let normalizedPageID = normalizedPageID(pageID)
+        let trimmedParentID = clean(parentID)
+
+        if let parentID = UUID(uuidString: trimmedParentID), store.page(with: parentID) != nil {
+            return parentID.uuidString
+        }
+
+        if let pageID = UUID(uuidString: normalizedPageID),
+           let existingPage = store.page(with: pageID),
+           let existingParentID = existingPage.parentID {
+            return existingParentID.uuidString
+        }
+
+        return ""
+    }
+
+    private func normalizedLinkedThoughtIDs(_ values: [String]) -> [String] {
+        let knownThoughtIDs = Set(store.thoughts.map(\.id))
+        return values.compactMap { value in
+            guard let id = UUID(uuidString: clean(value)), knownThoughtIDs.contains(id) else {
+                return nil
+            }
+
+            return id.uuidString
+        }
+    }
+
+    private func isDecodingFailure(_ error: Error) -> Bool {
+        guard let generationError = error as? LanguageModelSession.GenerationError else {
+            return false
+        }
+
+        if case .decodingFailure = generationError {
+            return true
+        }
+
+        return false
     }
 
     func generateRawText(instructions: String, prompt: String) async throws -> String {
@@ -375,14 +438,14 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
             distilled: output.distilled,
             classification: classification,
             tags: output.tags,
-            pageId: output.pageId,
-            pageParentId: output.pageParentId,
+            pageId: normalizedPageID(output.pageId),
+            pageParentId: normalizedPageParentID(pageID: output.pageId, parentID: output.pageParentId),
             pageTitle: output.pageTitle,
             pageSummary: output.pageSummary,
             pageBodyMarkdown: output.pageBodyMarkdown,
             themeTitle: output.themeTitle,
             themeSummary: output.themeSummary,
-            linkedThoughtIds: output.linkedThoughtIds,
+            linkedThoughtIds: normalizedLinkedThoughtIDs(output.linkedThoughtIds),
             dailyDigestTitle: output.dailyDigestTitle,
             dailyDigestSummary: output.dailyDigestSummary,
             dailyDigestHighlights: output.dailyDigestHighlights,
@@ -462,7 +525,7 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
     }
 
     private func inferredTimeComponents(from text: String) -> (hour: Int, minute: Int)? {
-        let pattern = #"\b(\d{1,2})(?::(\d{2}))?\s?(am|pm)\b|\b(\d{1,2}):(\d{2})\b"#
+        let pattern = #"\b(\d{1,2})(?::(\d{2}))?\s?(am|pm)\b|\b(\d{1,2}):(\d{2})\b|\b(at|by|before)\s+(\d{1,2})\b"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
             return nil
         }
@@ -496,6 +559,13 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
            let minuteString = matchedString(at: 5),
            let minute = Int(minuteString) {
             return (hour, minute)
+        }
+
+        if let hourString = matchedString(at: 7), var hour = Int(hourString) {
+            if (1...7).contains(hour) {
+                hour += 12
+            }
+            return (hour, 0)
         }
 
         return nil
