@@ -350,18 +350,30 @@ final class NotchPanelController {
         for surface in activationSurfaces {
             let hoverFrame = activationHoverFrame(on: surface.screen)
 
-            guard hoverFrame.contains(mouseLocation) else {
+            guard let localLocation = activationHoverLocation(mouseLocation, in: hoverFrame) else {
                 surface.model.endHover()
                 continue
             }
 
-            let localLocation = CGPoint(
-                x: mouseLocation.x - hoverFrame.minX,
-                y: mouseLocation.y - hoverFrame.minY
-            )
-
             surface.model.updateHover(location: localLocation, in: hoverFrame.size)
         }
+    }
+
+    private func activationHoverLocation(_ mouseLocation: NSPoint, in hoverFrame: NSRect) -> CGPoint? {
+        let topEdgeAllowance: CGFloat = 3
+        guard
+            mouseLocation.x >= hoverFrame.minX,
+            mouseLocation.x <= hoverFrame.maxX,
+            mouseLocation.y >= hoverFrame.minY,
+            mouseLocation.y <= hoverFrame.maxY + topEdgeAllowance
+        else {
+            return nil
+        }
+
+        return CGPoint(
+            x: mouseLocation.x - hoverFrame.minX,
+            y: min(mouseLocation.y - hoverFrame.minY, hoverFrame.height)
+        )
     }
 
     private func endActivationHover() {
@@ -395,7 +407,8 @@ final class NotchPanelController {
                 appearanceSettings: appearanceSettings,
                 processor: .shared,
                 notchSize: closedNotchSize(on: screen),
-                size: activationPanelSize
+                size: activationPanelSize,
+                usesTopEdgeLine: shouldHideClosedNotch(on: screen)
             )
         )
         panel.setFrame(activationFrame(on: screen), display: true)
@@ -754,10 +767,13 @@ final class NotchAnimationModel: ObservableObject {
     @Published private(set) var hideClosedNotch = true
     @Published private(set) var closedNotchSize = CGSize(width: 185, height: 32)
     private var pendingContentUnmount: DispatchWorkItem?
+    private var pendingOpeningGlowFade: DispatchWorkItem?
 
     func prepareForPresentation(hideClosedNotch: Bool, closedNotchSize: CGSize) {
         pendingContentUnmount?.cancel()
         pendingContentUnmount = nil
+        pendingOpeningGlowFade?.cancel()
+        pendingOpeningGlowFade = nil
         self.hideClosedNotch = hideClosedNotch
         self.closedNotchSize = closedNotchSize
         isOpen = false
@@ -773,6 +789,8 @@ final class NotchAnimationModel: ObservableObject {
     }
 
     func prepareOpeningGlow(strength: CGFloat) {
+        pendingOpeningGlowFade?.cancel()
+        pendingOpeningGlowFade = nil
         transitionGlowStrength = max(0, min(1, strength))
     }
 
@@ -785,9 +803,20 @@ final class NotchAnimationModel: ObservableObject {
             isOpen = true
         }
 
-        withAnimation(Self.openingGlowAnimation.delay(0.02)) {
-            transitionGlowStrength = 0
+        let fadeGlow = DispatchWorkItem { [weak self] in
+            guard let self, self.isOpen else {
+                return
+            }
+
+            withAnimation(Self.openingGlowAnimation) {
+                self.transitionGlowStrength = 0
+            }
+
+            self.pendingOpeningGlowFade = nil
         }
+
+        pendingOpeningGlowFade = fadeGlow
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: fadeGlow)
 
         withAnimation(Self.contentDismissalAnimation.delay(0.04)) {
             isContentPresented = true
@@ -799,6 +828,9 @@ final class NotchAnimationModel: ObservableObject {
     }
 
     func close() {
+        pendingOpeningGlowFade?.cancel()
+        pendingOpeningGlowFade = nil
+
         withAnimation(Self.contentDismissalAnimation) {
             isContentPresented = false
         }

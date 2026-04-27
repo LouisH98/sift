@@ -101,7 +101,8 @@ struct NotchView: View {
                     notchSize: currentSize,
                     topCornerRadius: topCornerRadius,
                     bottomCornerRadius: bottomCornerRadius,
-                    topOffset: topBlurBleed
+                    topOffset: topBlurBleed,
+                    shape: (!model.isOpen && model.hideClosedNotch) ? .topEdgeLine : .notch
                 )
                 .opacity(model.transitionGlowStrength > 0.01 ? 1 : 0)
                 .animation(NotchAnimationModel.openAnimation, value: model.isOpen)

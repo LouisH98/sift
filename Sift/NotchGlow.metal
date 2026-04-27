@@ -39,6 +39,71 @@ static float segmentDistance(float2 point, float2 start, float2 end) {
     return length(point - (start + (segment * t)));
 }
 
+static float roundedBoxDistance(float2 point, float2 center, float2 halfSize, float radius) {
+    float2 q = abs(point - center) - (halfSize - float2(radius));
+    return length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+}
+
+static float4 topEdgeLineGlowSample(
+    float2 position,
+    float2 size,
+    float strength,
+    float time,
+    float3 inputColor,
+    float2 notchSize,
+    float edrGain,
+    float topOffsetInput
+) {
+    if (strength <= 0.001 || size.x <= 1.0 || size.y <= 1.0) {
+        return float4(0.0);
+    }
+
+    float lineWidth = clamp(notchSize.x, 96.0, size.x * 0.92);
+    float tabHeight = clamp(notchSize.y * 2.4, 10.0, 18.0);
+    float topY = max(0.0, topOffsetInput);
+    float centerX = size.x * 0.5;
+    float halfLine = lineWidth * 0.5;
+    float lineLeft = centerX - halfLine;
+    float lineRight = centerX + halfLine;
+    float normalizedX = (position.x - centerX) / max(halfLine, 1.0);
+
+    float2 tabCenter = float2(centerX, topY);
+    float2 tabHalfSize = float2(halfLine, tabHeight);
+    float tabRadius = tabHeight * 0.58;
+    float tabDistance = roundedBoxDistance(position, tabCenter, tabHalfSize, tabRadius);
+    float lineDistance = segmentDistance(position, float2(lineLeft + tabRadius, topY), float2(lineRight - tabRadius, topY));
+    float capSoftness = smoothstep(5.0, -1.2, tabDistance);
+    float horizontalTaper = smoothstep(lineLeft - 42.0, lineLeft + 28.0, position.x)
+        * (1.0 - smoothstep(lineRight - 28.0, lineRight + 42.0, position.x));
+    float downwardMask = smoothstep(topY - 2.0, topY + 1.0, position.y)
+        * (1.0 - smoothstep(topY + 28.0, topY + 128.0, position.y));
+    float breath = 0.96 + (sin(time * 1.55) * 0.04);
+
+    float innerFill = smoothstep(1.6, -1.8, tabDistance) * 0.72;
+    float rimCore = exp(-pow(abs(tabDistance) / 1.35, 2.0)) * capSoftness * 0.92;
+    float bloom = exp(-pow(max(tabDistance, 0.0) / 10.5, 2.0)) * 0.5;
+    float halo = exp(-pow(max(tabDistance, 0.0) / 31.0, 2.0)) * 0.22;
+    float wash = exp(-pow(abs(position.y - (topY + 18.0)) / 31.0, 2.0))
+        * exp(-pow(abs(normalizedX) / 0.92, 4.0))
+        * 0.32;
+    float lipHighlight = exp(-pow(lineDistance / 2.2, 2.0))
+        * exp(-pow((position.y - topY) / 4.8, 2.0))
+        * 0.52;
+    float energy = (innerFill + rimCore + bloom + halo + wash + lipHighlight) * horizontalTaper * downwardMask * breath;
+    float alpha = clamp(energy * strength, 0.0, 0.82);
+
+    float3 baseColor = clamp(inputColor, 0.0, 1.0);
+    float3 leftBlue = mix(float3(0.16, 0.34, 1.0), baseColor, 0.18);
+    float3 centerCyan = mix(float3(0.70, 0.96, 1.0), baseColor, 0.12);
+    float3 rightViolet = mix(float3(0.58, 0.26, 1.0), baseColor, 0.12);
+    float3 sideColor = mix(leftBlue, rightViolet, smoothstep(-0.92, 0.92, normalizedX));
+    float3 glowColor = mix(sideColor, centerCyan, clamp(rimCore * 0.54 + innerFill * 0.28 + wash * 0.34, 0.0, 0.88));
+    glowColor = mix(glowColor, float3(1.0), clamp(rimCore * 0.42 + lipHighlight * 0.48, 0.0, 0.72));
+    glowColor *= alpha * edrGain;
+
+    return float4(glowColor, alpha);
+}
+
 static float4 notchGlowSample(
     float2 position,
     float2 size,
@@ -207,18 +272,32 @@ fragment half4 notchGlowFragment(
 ) {
     float2 size = uniforms.sizeStrengthTime.xy;
     float2 position = in.unitPosition * size;
-    float4 color = notchGlowSample(
-        position,
-        size,
-        uniforms.sizeStrengthTime.z,
-        uniforms.sizeStrengthTime.w,
-        uniforms.glowColor.rgb,
-        uniforms.notchGain.xy,
-        uniforms.notchGain.z,
-        uniforms.shape.x,
-        uniforms.shape.y,
-        uniforms.shape.z
-    );
+    float4 color;
+    if (uniforms.shape.w > 0.5) {
+        color = topEdgeLineGlowSample(
+            position,
+            size,
+            uniforms.sizeStrengthTime.z,
+            uniforms.sizeStrengthTime.w,
+            uniforms.glowColor.rgb,
+            uniforms.notchGain.xy,
+            uniforms.notchGain.z,
+            uniforms.shape.z
+        );
+    } else {
+        color = notchGlowSample(
+            position,
+            size,
+            uniforms.sizeStrengthTime.z,
+            uniforms.sizeStrengthTime.w,
+            uniforms.glowColor.rgb,
+            uniforms.notchGain.xy,
+            uniforms.notchGain.z,
+            uniforms.shape.x,
+            uniforms.shape.y,
+            uniforms.shape.z
+        );
+    }
 
     return half4(color);
 }

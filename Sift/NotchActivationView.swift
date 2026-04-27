@@ -64,6 +64,9 @@ struct NotchActivationView: View {
 
     let notchSize: CGSize
     let size: CGSize
+    let usesTopEdgeLine: Bool
+
+    private let topEdgeLineHeight: CGFloat = 5
 
     private var glowStrength: CGFloat {
         guard appearanceSettings.isGlowEnabled else {
@@ -80,16 +83,24 @@ struct NotchActivationView: View {
         return max(hoverOpacity, processingOpacity)
     }
 
+    private var activationSize: CGSize {
+        usesTopEdgeLine ? CGSize(width: notchSize.width, height: topEdgeLineHeight) : notchSize
+    }
+
+    private var glowShape: NotchGlowShape {
+        usesTopEdgeLine ? .topEdgeLine : .notch
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             if appearanceSettings.isGlowEnabled {
-                NotchGlowField(strength: glowStrength, notchSize: notchSize)
+                NotchGlowField(strength: glowStrength, notchSize: activationSize, shape: glowShape)
                     .opacity(glowStrength > 0.01 ? 1 : 0)
                     .animation(.smooth(duration: 0.16), value: glowStrength)
                     .allowsHitTesting(false)
 
                 notchSurface
-                    .padding(.top, -2)
+                    .padding(.top, usesTopEdgeLine ? 0 : -2)
                     .allowsHitTesting(false)
             }
         }
@@ -97,27 +108,137 @@ struct NotchActivationView: View {
         .preferredColorScheme(.dark)
     }
 
+    @ViewBuilder
     private var notchSurface: some View {
-        NotchShape(topCornerRadius: 6, bottomCornerRadius: 14)
-            .fill(.black.opacity(surfaceOpacity))
-            .frame(width: notchSize.width, height: notchSize.height)
-            .overlay {
-                NotchProcessingEffect(
-                    state: processor.notchProcessingState,
-                    topCornerRadius: 6,
-                    bottomCornerRadius: 14,
-                    glowColor: appearanceSettings.glowColor,
-                    segmentLengthScale: 1.35
-                )
-                .frame(width: notchSize.width + 10, height: notchSize.height + 6)
-            }
-            .shadow(color: appearanceSettings.glowColor.opacity(glowStrength * 0.34), radius: 18 + (glowStrength * 18), x: 0, y: 8)
-            .shadow(color: appearanceSettings.glowColor.opacity(glowStrength * 0.22), radius: 34 + (glowStrength * 24), x: 0, y: 18)
-            .scaleEffect(model.isPressed ? 0.985 : 1, anchor: .top)
-            .animation(.smooth(duration: 0.12), value: model.isHovered)
-            .animation(.smooth(duration: 0.08), value: model.isPressed)
-            .animation(.smooth(duration: 0.28), value: processor.notchProcessingState.isDistilling)
+        if usesTopEdgeLine {
+            Capsule()
+                .fill(.clear)
+                .frame(width: activationSize.width, height: activationSize.height)
+                .overlay {
+                    TopEdgeLineProcessingEffect(
+                        state: processor.notchProcessingState,
+                        glowColor: appearanceSettings.glowColor
+                    )
+                }
+                .scaleEffect(x: model.isPressed ? 0.985 : 1, y: 1, anchor: .top)
+                .animation(.smooth(duration: 0.12), value: model.isHovered)
+                .animation(.smooth(duration: 0.08), value: model.isPressed)
+                .animation(.smooth(duration: 0.28), value: processor.notchProcessingState.isDistilling)
+        } else {
+            NotchShape(topCornerRadius: 6, bottomCornerRadius: 14)
+                .fill(.black.opacity(surfaceOpacity))
+                .frame(width: notchSize.width, height: notchSize.height)
+                .overlay {
+                    NotchProcessingEffect(
+                        state: processor.notchProcessingState,
+                        topCornerRadius: 6,
+                        bottomCornerRadius: 14,
+                        glowColor: appearanceSettings.glowColor,
+                        segmentLengthScale: 1.35
+                    )
+                    .frame(width: notchSize.width + 10, height: notchSize.height + 6)
+                }
+                .shadow(color: appearanceSettings.glowColor.opacity(glowStrength * 0.34), radius: 18 + (glowStrength * 18), x: 0, y: 8)
+                .shadow(color: appearanceSettings.glowColor.opacity(glowStrength * 0.22), radius: 34 + (glowStrength * 24), x: 0, y: 18)
+                .scaleEffect(model.isPressed ? 0.985 : 1, anchor: .top)
+                .animation(.smooth(duration: 0.12), value: model.isHovered)
+                .animation(.smooth(duration: 0.08), value: model.isPressed)
+                .animation(.smooth(duration: 0.28), value: processor.notchProcessingState.isDistilling)
+        }
     }
+}
+
+private struct TopEdgeLineProcessingEffect: View {
+    let state: NotchProcessingState
+    let glowColor: Color
+
+    @State private var pulseStartedAt: TimeInterval?
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 60)) { timeline in
+            let seconds = timeline.date.timeIntervalSinceReferenceDate
+            let completion = completionProgress(seconds: seconds)
+            let isVisible = state.isDistilling || completion < 1
+
+            ZStack {
+                if state.isDistilling {
+                    movingSegment(seconds: seconds)
+                }
+
+                completionPulse(progress: completion)
+            }
+            .opacity(isVisible ? 1 : 0)
+            .animation(.smooth(duration: 0.28), value: state.isDistilling)
+            .animation(.smooth(duration: 0.22), value: state.completionPulse)
+        }
+        .compositingGroup()
+        .onChange(of: state.completionPulse) { _, newValue in
+            guard newValue > 0 else {
+                pulseStartedAt = nil
+                return
+            }
+
+            pulseStartedAt = Date().timeIntervalSinceReferenceDate
+        }
+    }
+
+    private func movingSegment(seconds: TimeInterval) -> some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let segmentWidth = max(42, width * 0.24)
+            let travelWidth = width + segmentWidth
+            let phase = CGFloat(seconds.truncatingRemainder(dividingBy: 1.9) / 1.9)
+            let x = (phase * travelWidth) - segmentWidth
+
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            glowColor.opacity(0),
+                            glowColor.opacity(0.72),
+                            .white.opacity(0.86),
+                            glowColor.opacity(0)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: segmentWidth, height: geometry.size.height)
+                .offset(x: x)
+                .blur(radius: 0.4)
+                .blendMode(.plusLighter)
+        }
+        .clipped()
+    }
+
+    private func completionPulse(progress: CGFloat) -> some View {
+        let opacity = max(0, 1 - progress)
+
+        return Capsule()
+            .fill(.white.opacity(opacity * 0.42))
+            .shadow(color: glowColor.opacity(opacity * 0.58), radius: 8 + (progress * 12), x: 0, y: 3)
+            .opacity(opacity)
+            .blendMode(.plusLighter)
+    }
+
+    private func completionProgress(seconds: TimeInterval) -> CGFloat {
+        guard let pulseStartedAt else {
+            return 1
+        }
+
+        let duration: TimeInterval = 0.72
+        let elapsed = seconds - pulseStartedAt
+        guard elapsed >= 0, elapsed <= duration else {
+            return 1
+        }
+
+        return CGFloat(elapsed / duration)
+    }
+}
+
+enum NotchGlowShape: Float {
+    case notch = 0
+    case topEdgeLine = 1
 }
 
 struct NotchGlowField: View, Animatable {
@@ -129,13 +250,15 @@ struct NotchGlowField: View, Animatable {
     var topCornerRadius: CGFloat
     var bottomCornerRadius: CGFloat
     let topOffset: CGFloat
+    let shape: NotchGlowShape
 
     init(
         strength: CGFloat,
         notchSize: CGSize,
         topCornerRadius: CGFloat = 6,
         bottomCornerRadius: CGFloat = 14,
-        topOffset: CGFloat = 0
+        topOffset: CGFloat = 0,
+        shape: NotchGlowShape = .notch
     ) {
         self.strength = strength
         notchWidth = notchSize.width
@@ -143,6 +266,7 @@ struct NotchGlowField: View, Animatable {
         self.topCornerRadius = topCornerRadius
         self.bottomCornerRadius = bottomCornerRadius
         self.topOffset = topOffset
+        self.shape = shape
     }
 
     var animatableData: AnimatablePair<CGFloat, AnimatablePair<CGFloat, AnimatablePair<CGFloat, AnimatablePair<CGFloat, CGFloat>>>> {
@@ -174,6 +298,7 @@ struct NotchGlowField: View, Animatable {
             topCornerRadius: topCornerRadius,
             bottomCornerRadius: bottomCornerRadius,
             topOffset: topOffset,
+            shape: shape,
             glowColor: appearanceSettings.nsGlowColor
         )
     }
@@ -185,6 +310,7 @@ private struct NotchGlowMetalView: NSViewRepresentable {
     let topCornerRadius: CGFloat
     let bottomCornerRadius: CGFloat
     let topOffset: CGFloat
+    let shape: NotchGlowShape
     let glowColor: NSColor
 
     func makeNSView(context: Context) -> NotchGlowRenderView {
@@ -198,6 +324,7 @@ private struct NotchGlowMetalView: NSViewRepresentable {
             topCornerRadius: topCornerRadius,
             bottomCornerRadius: bottomCornerRadius,
             topOffset: topOffset,
+            shape: shape,
             glowColor: glowColor
         )
     }
@@ -221,6 +348,7 @@ final class NotchGlowRenderView: NSView {
     private var topCornerRadius: CGFloat = 6
     private var bottomCornerRadius: CGFloat = 14
     private var topOffset: CGFloat = 0
+    private var shape: NotchGlowShape = .notch
     private var glowColor: NSColor = .systemCyan
 
     override init(frame frameRect: NSRect) {
@@ -299,6 +427,7 @@ final class NotchGlowRenderView: NSView {
         topCornerRadius: CGFloat,
         bottomCornerRadius: CGFloat,
         topOffset: CGFloat,
+        shape: NotchGlowShape,
         glowColor: NSColor
     ) {
         self.strength = strength
@@ -306,6 +435,7 @@ final class NotchGlowRenderView: NSView {
         self.topCornerRadius = topCornerRadius
         self.bottomCornerRadius = bottomCornerRadius
         self.topOffset = topOffset
+        self.shape = shape
         self.glowColor = glowColor.usingColorSpace(.deviceRGB) ?? glowColor
         render()
     }
@@ -346,7 +476,7 @@ final class NotchGlowRenderView: NSView {
                 Float(topCornerRadius) * scale,
                 Float(bottomCornerRadius) * scale,
                 Float(topOffset) * scale,
-                0
+                shape.rawValue
             )
         )
 
