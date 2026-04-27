@@ -4,6 +4,24 @@ enum NotchPage: Int, CaseIterable {
     case capture
     case actions
 
+    var iconName: String {
+        switch self {
+        case .capture:
+            return "text.bubble"
+        case .actions:
+            return "checklist"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .capture:
+            return "Capture thought"
+        case .actions:
+            return "Todo list"
+        }
+    }
+
     func moving(_ delta: Int) -> NotchPage {
         let pages = Self.allCases
         let currentIndex = pages.firstIndex(of: self) ?? 0
@@ -183,22 +201,16 @@ struct NotchView: View {
                 Button {
                     onPageDelta(page.rawValue - model.selectedPage.rawValue)
                 } label: {
-                    ZStack {
-                        Circle()
-                            .fill(page == model.selectedPage ? .white.opacity(0.76) : .white.opacity(0.22))
-                            .frame(width: 5, height: 5)
-                    }
-                    .frame(width: 18, height: 14)
-                    .contentShape(Rectangle())
+                    Image(systemName: page.iconName)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(page == model.selectedPage ? .white.opacity(0.78) : .white.opacity(0.32))
+                        .frame(width: 18, height: 14)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(page.title)
+                .help(page.title)
             }
-
-            Spacer()
-
-            Image(systemName: model.selectedPage == .capture ? "text.cursor" : "checklist")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.48))
         }
         .frame(height: 10)
     }
