@@ -2,11 +2,11 @@ import AppKit
 import SwiftUI
 
 struct ThoughtCaptureView: View {
+    @Binding var text: String
+
     let onSave: (String) -> Void
     let onCancel: () -> Void
     let onPageDelta: (Int) -> Void
-
-    @State private var text = ""
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -122,10 +122,11 @@ private struct CaptureTextView: NSViewRepresentable {
         textView.placeholderString = placeholder
         textView.refreshThemePrefixHighlight()
 
-        let scrollView = NSScrollView()
+        let scrollView = CaptureScrollView()
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
         scrollView.documentView = textView
 
         return scrollView
@@ -144,6 +145,7 @@ private struct CaptureTextView: NSViewRepresentable {
         textView.onSave = onSave
         textView.onCancel = onCancel
         textView.onPageDelta = onPageDelta
+        (scrollView as? CaptureScrollView)?.onPageDelta = onPageDelta
 
         DispatchQueue.main.async {
             guard let window = textView.window else {
@@ -172,6 +174,77 @@ private struct CaptureTextView: NSViewRepresentable {
             (textView as? CommandTextView)?.refreshThemePrefixHighlight()
             textView.needsDisplay = true
         }
+    }
+}
+
+private final class CaptureScrollView: NSScrollView {
+    var onPageDelta: ((Int) -> Void)?
+    private var accumulatedHorizontalScroll: CGFloat = 0
+    private var didPageDuringCurrentScrollGesture = false
+
+    override func scrollWheel(with event: NSEvent) {
+        if handlePageScroll(event) {
+            return
+        }
+
+        super.scrollWheel(with: event)
+    }
+
+    private func handlePageScroll(_ event: NSEvent) -> Bool {
+        let horizontal = event.scrollingDeltaX
+        let vertical = event.scrollingDeltaY
+        guard abs(horizontal) > abs(vertical) * 1.25, abs(horizontal) > 0.5 else {
+            accumulatedHorizontalScroll = 0
+            resetEndedScrollGesture(event)
+            return false
+        }
+
+        if event.phase.contains(.began) || event.phase.contains(.mayBegin) {
+            resetScrollGestureTracking()
+        }
+
+        if !event.momentumPhase.isEmpty {
+            resetEndedScrollGesture(event)
+            return true
+        }
+
+        let isUnphasedWheelEvent = event.phase.isEmpty
+        defer {
+            if isUnphasedWheelEvent {
+                resetScrollGestureTracking()
+            } else {
+                resetEndedScrollGesture(event)
+            }
+        }
+
+        if didPageDuringCurrentScrollGesture {
+            return true
+        }
+
+        accumulatedHorizontalScroll += horizontal
+
+        let threshold: CGFloat = event.hasPreciseScrollingDeltas ? 22 : 2
+        guard abs(accumulatedHorizontalScroll) >= threshold else {
+            return true
+        }
+
+        didPageDuringCurrentScrollGesture = true
+        let direction = accumulatedHorizontalScroll > 0 ? 1 : -1
+        accumulatedHorizontalScroll = 0
+        onPageDelta?(direction)
+
+        return true
+    }
+
+    private func resetEndedScrollGesture(_ event: NSEvent) {
+        if event.phase.contains(.ended) || event.phase.contains(.cancelled) || event.momentumPhase.contains(.ended) || event.momentumPhase.contains(.cancelled) {
+            resetScrollGestureTracking()
+        }
+    }
+
+    private func resetScrollGestureTracking() {
+        accumulatedHorizontalScroll = 0
+        didPageDuringCurrentScrollGesture = false
     }
 }
 

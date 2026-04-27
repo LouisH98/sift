@@ -24,8 +24,8 @@ final class NotchPanelController {
     private var globalActivationClickMonitor: Any?
     private var screenParametersObserver: NSObjectProtocol?
     private var accumulatedHorizontalScroll: CGFloat = 0
+    private var didPageDuringCurrentScrollGesture = false
     private var accumulatedTopEdgePush: CGFloat = 0
-    private var lastPageScrollAt = Date.distantPast
     private var lastActivationClickAt = Date.distantPast
     private var lastTopEdgePushAt = Date.distantPast
 
@@ -474,6 +474,7 @@ final class NotchPanelController {
             panel.frame.contains(NSEvent.mouseLocation)
         else {
             accumulatedHorizontalScroll = 0
+            resetScrollGestureTracking()
             return false
         }
 
@@ -481,7 +482,30 @@ final class NotchPanelController {
         let vertical = event.scrollingDeltaY
         guard abs(horizontal) > abs(vertical) * 1.25, abs(horizontal) > 0.5 else {
             accumulatedHorizontalScroll = 0
+            resetEndedScrollGesture(event)
             return false
+        }
+
+        if event.phase.contains(.began) || event.phase.contains(.mayBegin) {
+            resetScrollGestureTracking()
+        }
+
+        if !event.momentumPhase.isEmpty {
+            resetEndedScrollGesture(event)
+            return true
+        }
+
+        let isUnphasedWheelEvent = event.phase.isEmpty
+        defer {
+            if isUnphasedWheelEvent {
+                resetScrollGestureTracking()
+            } else {
+                resetEndedScrollGesture(event)
+            }
+        }
+
+        if didPageDuringCurrentScrollGesture {
+            return true
         }
 
         accumulatedHorizontalScroll += horizontal
@@ -491,17 +515,23 @@ final class NotchPanelController {
             return true
         }
 
-        let now = Date()
-        guard now.timeIntervalSince(lastPageScrollAt) > 0.24 else {
-            return true
-        }
-
-        lastPageScrollAt = now
+        didPageDuringCurrentScrollGesture = true
         let direction = accumulatedHorizontalScroll > 0 ? 1 : -1
         accumulatedHorizontalScroll = 0
         movePage(direction)
 
         return true
+    }
+
+    private func resetEndedScrollGesture(_ event: NSEvent) {
+        if event.phase.contains(.ended) || event.phase.contains(.cancelled) || event.momentumPhase.contains(.ended) || event.momentumPhase.contains(.cancelled) {
+            resetScrollGestureTracking()
+        }
+    }
+
+    private func resetScrollGestureTracking() {
+        accumulatedHorizontalScroll = 0
+        didPageDuringCurrentScrollGesture = false
     }
 
     private func stopScrollEventMonitor() {
@@ -511,7 +541,7 @@ final class NotchPanelController {
 
         NSEvent.removeMonitor(scrollEventMonitor)
         self.scrollEventMonitor = nil
-        accumulatedHorizontalScroll = 0
+        resetScrollGestureTracking()
     }
 
     private func scheduleCaptureFocus() {
@@ -685,6 +715,7 @@ final class NotchAnimationModel: ObservableObject {
     @Published var isBlurred = true
     @Published private(set) var isContentMounted = false
     @Published private(set) var isContentPresented = false
+    @Published var captureDraft = ""
     @Published var selectedPage: NotchPage = .capture
     @Published private(set) var hideClosedNotch = true
     private var pendingContentUnmount: DispatchWorkItem?

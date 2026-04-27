@@ -7,8 +7,15 @@ enum NotchPage: Int, CaseIterable {
     func moving(_ delta: Int) -> NotchPage {
         let pages = Self.allCases
         let currentIndex = pages.firstIndex(of: self) ?? 0
-        let nextIndex = min(max(currentIndex + delta, 0), pages.count - 1)
+        let nextIndex = (currentIndex + delta).positiveModulo(pages.count)
         return pages[nextIndex]
+    }
+}
+
+private extension Int {
+    func positiveModulo(_ divisor: Int) -> Int {
+        let remainder = self % divisor
+        return remainder >= 0 ? remainder : remainder + divisor
     }
 }
 
@@ -115,6 +122,7 @@ struct NotchView: View {
                         switch model.selectedPage {
                         case .capture:
                             ThoughtCaptureView(
+                                text: $model.captureDraft,
                                 onSave: onSave,
                                 onCancel: onCancel,
                                 onPageDelta: onPageDelta
