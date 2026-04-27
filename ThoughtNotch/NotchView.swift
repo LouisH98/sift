@@ -147,10 +147,13 @@ struct NotchView: View {
                 Button {
                     onPageDelta(page.rawValue - model.selectedPage.rawValue)
                 } label: {
-                    Circle()
-                        .fill(page == model.selectedPage ? .white.opacity(0.76) : .white.opacity(0.22))
-                        .frame(width: 5, height: 5)
-                        .contentShape(Rectangle())
+                    ZStack {
+                        Circle()
+                            .fill(page == model.selectedPage ? .white.opacity(0.76) : .white.opacity(0.22))
+                            .frame(width: 5, height: 5)
+                    }
+                    .frame(width: 18, height: 14)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }

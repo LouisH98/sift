@@ -7,12 +7,25 @@ final class NotchPanelController {
     private let store: ThoughtStore
     private let animationModel = NotchAnimationModel()
     private let actionNavigationModel = ActionListNavigationModel()
+    private let appearanceSettings = NotchAppearanceSettings.shared
     private var panel: NotchPanel?
+    private var activationPanels: [NotchActivationPanel] = []
     private var pendingOrderOut: DispatchWorkItem?
     private var keyEventMonitor: Any?
+    private var scrollEventMonitor: Any?
+    private var localActivationClickMonitor: Any?
+    private var globalActivationClickMonitor: Any?
+    private var screenParametersObserver: NSObjectProtocol?
+    private var accumulatedHorizontalScroll: CGFloat = 0
+    private var lastPageScrollAt = Date.distantPast
+    private var lastActivationClickAt = Date.distantPast
 
     private let topBlurBleed: CGFloat = 32
     private let visibleWindowSize = NSSize(width: 640, height: 240)
+    private let activationHitSize = NSSize(width: 380, height: 78)
+    private let activationPanelSize = NSSize(width: 980, height: 220)
+    private let notchActivationSize = NSSize(width: 185, height: 32)
+    private let notchlessPushSize = NSSize(width: 185, height: 6)
 
     init(store: ThoughtStore) {
         self.store = store
@@ -20,6 +33,25 @@ final class NotchPanelController {
 
     var isVisible: Bool {
         panel?.isVisible == true
+    }
+
+    func installMouseActivationPanels() {
+        guard screenParametersObserver == nil else {
+            return
+        }
+
+        rebuildActivationPanels()
+        startActivationClickMonitors()
+
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.rebuildActivationPanels()
+            }
+        }
     }
 
     func toggle() {
@@ -44,14 +76,14 @@ final class NotchPanelController {
         PageNavigationShortcut.activateRegisteredShortcuts()
     }
 
-    func show() {
+    func show(on sourceScreen: NSScreen? = nil) {
         pendingOrderOut?.cancel()
         pendingOrderOut = nil
 
         let panel = panel ?? makePanel()
         self.panel = panel
 
-        let screen = activeScreen()
+        let screen = sourceScreen ?? activeScreen()
         let finalFrame = frame(on: screen)
 
         animationModel.prepareForPresentation(hideClosedNotch: shouldHideClosedNotch(on: screen))
@@ -61,6 +93,7 @@ final class NotchPanelController {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         startKeyEventMonitor()
+        startScrollEventMonitor()
         PageNavigationShortcut.activateRegisteredShortcuts()
 
         DispatchQueue.main.async { [weak self] in
@@ -90,6 +123,7 @@ final class NotchPanelController {
             panel.orderOut(nil)
             panel.alphaValue = 1
             self.stopKeyEventMonitor()
+            self.stopScrollEventMonitor()
             PageNavigationShortcut.deactivateRegisteredShortcuts()
         }
 
@@ -108,9 +142,12 @@ final class NotchPanelController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
+        panel.acceptsMouseMovedEvents = true
+        panel.ignoresMouseEvents = false
         panel.level = .screenSaver
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.isMovableByWindowBackground = false
+        panel.hidesOnDeactivate = false
         panel.onCancel = { [weak self] in
             Task { @MainActor in
                 self?.hide()
@@ -149,6 +186,111 @@ final class NotchPanelController {
                 }
             )
         )
+
+        return panel
+    }
+
+    private func rebuildActivationPanels() {
+        activationPanels.forEach { $0.close() }
+        activationPanels = NSScreen.screens.map { makeActivationPanel(on: $0) }
+    }
+
+    private func startActivationClickMonitors() {
+        guard localActivationClickMonitor == nil, globalActivationClickMonitor == nil else {
+            return
+        }
+
+        localActivationClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            self?.handleMouseDown(at: NSEvent.mouseLocation)
+            return event
+        }
+
+        globalActivationClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleMouseDown(at: NSEvent.mouseLocation)
+            }
+        }
+    }
+
+    private func handleMouseDown(at mouseLocation: NSPoint) {
+        if isVisible {
+            handleOutsidePanelClick(at: mouseLocation)
+        } else {
+            handleActivationClick(at: mouseLocation)
+        }
+    }
+
+    private func handleOutsidePanelClick(at mouseLocation: NSPoint) {
+        guard
+            let panel,
+            panel.isVisible,
+            !panel.frame.contains(mouseLocation)
+        else {
+            return
+        }
+
+        hide()
+    }
+
+    private func handleActivationClick(at mouseLocation: NSPoint) {
+        guard !isVisible else {
+            return
+        }
+
+        let now = Date()
+        guard now.timeIntervalSince(lastActivationClickAt) > 0.24 else {
+            return
+        }
+
+        guard let screen = NSScreen.screens.first(where: { activationClickFrame(on: $0).contains(mouseLocation) }) else {
+            return
+        }
+
+        lastActivationClickAt = now
+        show(on: screen)
+    }
+
+    private func makeActivationPanel(on screen: NSScreen) -> NotchActivationPanel {
+        let panel = NotchActivationPanel(
+            contentRect: activationFrame(on: screen),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        let hoverModel = NotchActivationHoverModel()
+        let isNotchless = shouldHideClosedNotch(on: screen)
+
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = .screenSaver
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.isMovableByWindowBackground = false
+        panel.hidesOnDeactivate = false
+        panel.onActivate = { [weak self] in
+            Task { @MainActor in
+                guard let self else {
+                    return
+                }
+
+                self.handleActivationClick(at: NSEvent.mouseLocation)
+            }
+        }
+        panel.contentView = FirstMouseHostingView(
+            rootView: NotchActivationView(
+                model: hoverModel,
+                appearanceSettings: appearanceSettings,
+                size: activationPanelSize,
+                hitSize: activationHitSize,
+                activationSize: activationClickSize(on: screen),
+                opensOnTopEdgePush: isNotchless,
+                onActivate: { [weak panel] in
+                    panel?.activateFromMouse()
+                }
+            )
+        )
+        panel.setFrame(activationFrame(on: screen), display: true)
+        panel.orderFrontRegardless()
 
         return panel
     }
@@ -212,6 +354,68 @@ final class NotchPanelController {
 
         NSEvent.removeMonitor(keyEventMonitor)
         self.keyEventMonitor = nil
+    }
+
+    private func startScrollEventMonitor() {
+        guard scrollEventMonitor == nil else {
+            return
+        }
+
+        scrollEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self, self.handlePageScroll(event) else {
+                return event
+            }
+
+            return nil
+        }
+    }
+
+    private func handlePageScroll(_ event: NSEvent) -> Bool {
+        guard
+            isVisible,
+            animationModel.isOpen,
+            let panel,
+            panel.frame.contains(NSEvent.mouseLocation)
+        else {
+            accumulatedHorizontalScroll = 0
+            return false
+        }
+
+        let horizontal = event.scrollingDeltaX
+        let vertical = event.scrollingDeltaY
+        guard abs(horizontal) > abs(vertical) * 1.25, abs(horizontal) > 0.5 else {
+            accumulatedHorizontalScroll = 0
+            return false
+        }
+
+        accumulatedHorizontalScroll += horizontal
+
+        let threshold: CGFloat = event.hasPreciseScrollingDeltas ? 22 : 2
+        guard abs(accumulatedHorizontalScroll) >= threshold else {
+            return true
+        }
+
+        let now = Date()
+        guard now.timeIntervalSince(lastPageScrollAt) > 0.24 else {
+            return true
+        }
+
+        lastPageScrollAt = now
+        let direction = accumulatedHorizontalScroll > 0 ? 1 : -1
+        accumulatedHorizontalScroll = 0
+        movePage(direction)
+
+        return true
+    }
+
+    private func stopScrollEventMonitor() {
+        guard let scrollEventMonitor else {
+            return
+        }
+
+        NSEvent.removeMonitor(scrollEventMonitor)
+        self.scrollEventMonitor = nil
+        accumulatedHorizontalScroll = 0
     }
 
     private func scheduleCaptureFocus() {
@@ -306,6 +510,25 @@ final class NotchPanelController {
         let y = screen.frame.maxY - visibleWindowSize.height
 
         return NSRect(x: x, y: y, width: size.width, height: size.height)
+    }
+
+    private func activationFrame(on screen: NSScreen) -> NSRect {
+        let x = screen.frame.midX - (activationPanelSize.width / 2)
+        let y = screen.frame.maxY - activationPanelSize.height
+
+        return NSRect(origin: CGPoint(x: x, y: y), size: activationPanelSize)
+    }
+
+    private func activationClickSize(on screen: NSScreen) -> NSSize {
+        shouldHideClosedNotch(on: screen) ? notchlessPushSize : notchActivationSize
+    }
+
+    private func activationClickFrame(on screen: NSScreen) -> NSRect {
+        let size = activationClickSize(on: screen)
+        let x = screen.frame.midX - (size.width / 2)
+        let y = screen.frame.maxY - size.height
+
+        return NSRect(origin: CGPoint(x: x, y: y), size: size)
     }
 
     private func shouldHideClosedNotch(on screen: NSScreen) -> Bool {
@@ -411,6 +634,7 @@ final class NotchAnimationModel: ObservableObject {
 final class NotchPanel: NSPanel {
     var onCancel: (() -> Void)?
     var onPageDelta: ((Int) -> Void)?
+    private var didCancelFromResign = false
 
     override var canBecomeKey: Bool {
         true
@@ -418,6 +642,21 @@ final class NotchPanel: NSPanel {
 
     override var canBecomeMain: Bool {
         true
+    }
+
+    override func resignKey() {
+        super.resignKey()
+
+        guard isVisible, !didCancelFromResign else {
+            return
+        }
+
+        didCancelFromResign = true
+        onCancel?()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.didCancelFromResign = false
+        }
     }
 
     override func keyDown(with event: NSEvent) {

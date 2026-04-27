@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         PageNavigationShortcut.deactivateRegisteredShortcuts()
         ActionReminderScheduler.shared.syncAll(actionItems: store.openActionItems, settings: TodoSettings.shared)
+        notchPanelController.installMouseActivationPanels()
 
         KeyboardShortcuts.onKeyDown(for: .toggleNotch) { [weak self] in
             Task { @MainActor in

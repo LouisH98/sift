@@ -5,6 +5,7 @@ import SwiftUI
 struct SettingsView: View {
     @StateObject private var settings = AISettings.shared
     @StateObject private var todoSettings = TodoSettings.shared
+    @StateObject private var appearanceSettings = NotchAppearanceSettings.shared
     @StateObject private var processor = ThoughtProcessor.shared
     @ObservedObject private var store = ThoughtStore.shared
     @State private var availableModels: [String] = []
@@ -17,6 +18,27 @@ struct SettingsView: View {
         Form {
             Section("Capture") {
                 KeyboardShortcuts.Recorder("Toggle notch:", name: .toggleNotch)
+            }
+
+            Section("Notch") {
+                Toggle("Glow on hover", isOn: $appearanceSettings.isGlowEnabled)
+
+                ColorPicker("Glow color", selection: glowColorBinding, supportsOpacity: false)
+                    .disabled(!appearanceSettings.isGlowEnabled)
+
+                HStack {
+                    Text(appearanceSettings.glowColorHex)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Button("Reset") {
+                        appearanceSettings.resetGlowColor()
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!appearanceSettings.isGlowEnabled)
+                }
             }
 
             Section("Startup") {
@@ -134,6 +156,13 @@ struct SettingsView: View {
         let hours = minutes / 60
         let remainingMinutes = minutes % 60
         return "\(hours)h \(remainingMinutes)m"
+    }
+
+    private var glowColorBinding: Binding<Color> {
+        Binding(
+            get: { appearanceSettings.glowColor },
+            set: { appearanceSettings.setGlowColor($0) }
+        )
     }
 
     @ViewBuilder
