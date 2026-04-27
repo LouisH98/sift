@@ -4,12 +4,18 @@ import SwiftUI
 
 @MainActor
 final class NotchPanelController {
+    private struct ActivationSurface {
+        let panel: NotchActivationPanel
+        let model: NotchActivationHoverModel
+        let screen: NSScreen
+    }
+
     private let store: ThoughtStore
     private let animationModel = NotchAnimationModel()
     private let actionNavigationModel = ActionListNavigationModel()
     private let appearanceSettings = NotchAppearanceSettings.shared
     private var panel: NotchPanel?
-    private var activationPanels: [NotchActivationPanel] = []
+    private var activationSurfaces: [ActivationSurface] = []
     private var pendingOrderOut: DispatchWorkItem?
     private var keyEventMonitor: Any?
     private var scrollEventMonitor: Any?
@@ -17,15 +23,18 @@ final class NotchPanelController {
     private var globalActivationClickMonitor: Any?
     private var screenParametersObserver: NSObjectProtocol?
     private var accumulatedHorizontalScroll: CGFloat = 0
+    private var accumulatedTopEdgePush: CGFloat = 0
     private var lastPageScrollAt = Date.distantPast
     private var lastActivationClickAt = Date.distantPast
+    private var lastTopEdgePushAt = Date.distantPast
 
     private let topBlurBleed: CGFloat = 32
     private let visibleWindowSize = NSSize(width: 640, height: 240)
     private let activationHitSize = NSSize(width: 380, height: 78)
     private let activationPanelSize = NSSize(width: 980, height: 220)
     private let notchActivationSize = NSSize(width: 185, height: 32)
-    private let notchlessPushSize = NSSize(width: 185, height: 6)
+    private let topEdgePushSize = NSSize(width: 185, height: 10)
+    private let topEdgePushThreshold: CGFloat = 34
 
     init(store: ThoughtStore) {
         self.store = store
@@ -191,8 +200,8 @@ final class NotchPanelController {
     }
 
     private func rebuildActivationPanels() {
-        activationPanels.forEach { $0.close() }
-        activationPanels = NSScreen.screens.map { makeActivationPanel(on: $0) }
+        activationSurfaces.forEach { $0.panel.close() }
+        activationSurfaces = NSScreen.screens.map { makeActivationPanel(on: $0) }
     }
 
     private func startActivationClickMonitors() {
@@ -200,23 +209,52 @@ final class NotchPanelController {
             return
         }
 
-        localActivationClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-            self?.handleMouseDown(at: NSEvent.mouseLocation)
+        let eventMask: NSEvent.EventTypeMask = [.leftMouseDown, .mouseMoved, .leftMouseDragged]
+
+        localActivationClickMonitor = NSEvent.addLocalMonitorForEvents(matching: eventMask) { [weak self] event in
+            self?.handlePassiveActivationEvent(
+                type: event.type,
+                mouseLocation: NSEvent.mouseLocation,
+                deltaX: event.deltaX,
+                deltaY: event.deltaY
+            )
             return event
         }
 
-        globalActivationClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
+        globalActivationClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: eventMask) { [weak self] event in
+            let eventType = event.type
+            let deltaX = event.deltaX
+            let deltaY = event.deltaY
+
             Task { @MainActor in
-                self?.handleMouseDown(at: NSEvent.mouseLocation)
+                self?.handlePassiveActivationEvent(
+                    type: eventType,
+                    mouseLocation: NSEvent.mouseLocation,
+                    deltaX: deltaX,
+                    deltaY: deltaY
+                )
             }
         }
     }
 
-    private func handleMouseDown(at mouseLocation: NSPoint) {
+    private func handlePassiveActivationEvent(type: NSEvent.EventType, mouseLocation: NSPoint, deltaX: CGFloat, deltaY: CGFloat) {
         if isVisible {
-            handleOutsidePanelClick(at: mouseLocation)
-        } else {
+            resetTopEdgePush()
+            endActivationHover()
+
+            if type == .leftMouseDown {
+                handleOutsidePanelClick(at: mouseLocation)
+            }
+
+            return
+        }
+
+        updateActivationHover(at: mouseLocation)
+
+        if type == .leftMouseDown {
             handleActivationClick(at: mouseLocation)
+        } else {
+            handleTopEdgePush(at: mouseLocation, deltaX: deltaX, deltaY: deltaY)
         }
     }
 
@@ -246,11 +284,73 @@ final class NotchPanelController {
             return
         }
 
-        lastActivationClickAt = now
+        openFromMouseActivation(on: screen, at: now)
+    }
+
+    private func handleTopEdgePush(at mouseLocation: NSPoint, deltaX: CGFloat, deltaY: CGFloat) {
+        guard let screen = topEdgePushScreen(at: mouseLocation) else {
+            resetTopEdgePush()
+            return
+        }
+
+        let verticalPressure = abs(deltaY)
+        guard verticalPressure > abs(deltaX) * 0.65, verticalPressure > 0.05 else {
+            return
+        }
+
+        accumulatedTopEdgePush += verticalPressure
+
+        let now = Date()
+        guard
+            accumulatedTopEdgePush >= topEdgePushThreshold,
+            now.timeIntervalSince(lastTopEdgePushAt) > 0.45,
+            now.timeIntervalSince(lastActivationClickAt) > 0.24
+        else {
+            return
+        }
+
+        lastTopEdgePushAt = now
+        openFromMouseActivation(on: screen, at: now)
+    }
+
+    private func openFromMouseActivation(on screen: NSScreen, at date: Date = Date()) {
+        guard !isVisible else {
+            return
+        }
+
+        lastActivationClickAt = date
+        resetTopEdgePush()
+        endActivationHover()
         show(on: screen)
     }
 
-    private func makeActivationPanel(on screen: NSScreen) -> NotchActivationPanel {
+    private func updateActivationHover(at mouseLocation: NSPoint) {
+        for surface in activationSurfaces {
+            let hoverFrame = activationHoverFrame(on: surface.screen)
+
+            guard hoverFrame.contains(mouseLocation) else {
+                surface.model.endHover()
+                continue
+            }
+
+            let localLocation = CGPoint(
+                x: mouseLocation.x - hoverFrame.minX,
+                y: mouseLocation.y - hoverFrame.minY
+            )
+
+            surface.model.updateHover(location: localLocation, in: hoverFrame.size)
+        }
+    }
+
+    private func endActivationHover() {
+        activationSurfaces.forEach { $0.model.endHover() }
+    }
+
+    private func resetTopEdgePush() {
+        accumulatedTopEdgePush = 0
+    }
+
+    private func makeActivationPanel(on screen: NSScreen) -> ActivationSurface {
         let panel = NotchActivationPanel(
             contentRect: activationFrame(on: screen),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -258,41 +358,26 @@ final class NotchPanelController {
             defer: false
         )
         let hoverModel = NotchActivationHoverModel()
-        let isNotchless = shouldHideClosedNotch(on: screen)
 
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
+        panel.ignoresMouseEvents = true
         panel.level = .screenSaver
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
-        panel.onActivate = { [weak self] in
-            Task { @MainActor in
-                guard let self else {
-                    return
-                }
-
-                self.handleActivationClick(at: NSEvent.mouseLocation)
-            }
-        }
-        panel.contentView = FirstMouseHostingView(
+        panel.contentView = NSHostingView(
             rootView: NotchActivationView(
                 model: hoverModel,
                 appearanceSettings: appearanceSettings,
-                size: activationPanelSize,
-                hitSize: activationHitSize,
-                activationSize: activationClickSize(on: screen),
-                opensOnTopEdgePush: isNotchless,
-                onActivate: { [weak panel] in
-                    panel?.activateFromMouse()
-                }
+                size: activationPanelSize
             )
         )
         panel.setFrame(activationFrame(on: screen), display: true)
         panel.orderFrontRegardless()
 
-        return panel
+        return ActivationSurface(panel: panel, model: hoverModel, screen: screen)
     }
 
     private func startKeyEventMonitor() {
@@ -519,8 +604,15 @@ final class NotchPanelController {
         return NSRect(origin: CGPoint(x: x, y: y), size: activationPanelSize)
     }
 
+    private func activationHoverFrame(on screen: NSScreen) -> NSRect {
+        let x = screen.frame.midX - (activationHitSize.width / 2)
+        let y = screen.frame.maxY - activationHitSize.height
+
+        return NSRect(origin: CGPoint(x: x, y: y), size: activationHitSize)
+    }
+
     private func activationClickSize(on screen: NSScreen) -> NSSize {
-        shouldHideClosedNotch(on: screen) ? notchlessPushSize : notchActivationSize
+        shouldHideClosedNotch(on: screen) ? topEdgePushSize : notchActivationSize
     }
 
     private func activationClickFrame(on screen: NSScreen) -> NSRect {
@@ -529,6 +621,16 @@ final class NotchPanelController {
         let y = screen.frame.maxY - size.height
 
         return NSRect(origin: CGPoint(x: x, y: y), size: size)
+    }
+
+    private func topEdgePushScreen(at mouseLocation: NSPoint) -> NSScreen? {
+        NSScreen.screens.first { screen in
+            let x = screen.frame.midX - (topEdgePushSize.width / 2)
+            let topCenterXRange = x...(x + topEdgePushSize.width)
+
+            return topCenterXRange.contains(mouseLocation.x)
+                && mouseLocation.y >= screen.frame.maxY - topEdgePushSize.height
+        }
     }
 
     private func shouldHideClosedNotch(on screen: NSScreen) -> Bool {

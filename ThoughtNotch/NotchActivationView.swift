@@ -2,12 +2,6 @@ import AppKit
 import Combine
 import SwiftUI
 
-final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
-        true
-    }
-}
-
 @MainActor
 final class NotchActivationHoverModel: ObservableObject {
     @Published var isHovered = false
@@ -51,10 +45,6 @@ struct NotchActivationView: View {
     @ObservedObject var appearanceSettings: NotchAppearanceSettings
 
     let size: CGSize
-    let hitSize: CGSize
-    let activationSize: CGSize
-    let opensOnTopEdgePush: Bool
-    let onActivate: () -> Void
 
     private let notchSize = CGSize(width: 185, height: 32)
 
@@ -82,15 +72,6 @@ struct NotchActivationView: View {
                     .padding(.top, -2)
                     .allowsHitTesting(false)
             }
-
-            NotchActivationTrackingView(
-                model: model,
-                activationSize: activationSize,
-                opensOnTopEdgePush: opensOnTopEdgePush,
-                onActivate: onActivate
-            )
-            .frame(width: hitSize.width, height: hitSize.height)
-            .frame(width: size.width, height: size.height, alignment: .top)
         }
         .frame(width: size.width, height: size.height)
         .preferredColorScheme(.dark)
@@ -142,146 +123,12 @@ private struct NotchGlowField: View {
     }
 }
 
-private struct NotchActivationTrackingView: NSViewRepresentable {
-    @ObservedObject var model: NotchActivationHoverModel
-
-    let activationSize: CGSize
-    let opensOnTopEdgePush: Bool
-    let onActivate: () -> Void
-
-    func makeNSView(context: Context) -> TrackingView {
-        let view = TrackingView()
-        view.model = model
-        view.activationSize = activationSize
-        view.opensOnTopEdgePush = opensOnTopEdgePush
-        view.onActivate = onActivate
-        return view
-    }
-
-    func updateNSView(_ view: TrackingView, context: Context) {
-        view.model = model
-        view.activationSize = activationSize
-        view.opensOnTopEdgePush = opensOnTopEdgePush
-        view.onActivate = onActivate
-    }
-
-    final class TrackingView: NSView {
-        weak var model: NotchActivationHoverModel?
-        var activationSize: CGSize = .zero
-        var opensOnTopEdgePush = false
-        var onActivate: (() -> Void)?
-
-        private var trackingArea: NSTrackingArea?
-
-        override var acceptsFirstResponder: Bool {
-            true
-        }
-
-        override var isFlipped: Bool {
-            false
-        }
-
-        override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
-            true
-        }
-
-        override func hitTest(_ point: NSPoint) -> NSView? {
-            activationRect.contains(point) ? self : nil
-        }
-
-        override func updateTrackingAreas() {
-            super.updateTrackingAreas()
-
-            if let trackingArea {
-                removeTrackingArea(trackingArea)
-            }
-
-            let options: NSTrackingArea.Options = [
-                .activeAlways,
-                .inVisibleRect,
-                .mouseEnteredAndExited,
-                .mouseMoved
-            ]
-            let nextTrackingArea = NSTrackingArea(
-                rect: bounds,
-                options: options,
-                owner: self,
-                userInfo: nil
-            )
-
-            addTrackingArea(nextTrackingArea)
-            trackingArea = nextTrackingArea
-        }
-
-        override func mouseEntered(with event: NSEvent) {
-            updateHover(with: event)
-        }
-
-        override func mouseMoved(with event: NSEvent) {
-            updateHover(with: event)
-            activateOnTopEdgePushIfNeeded(with: event)
-        }
-
-        override func mouseDragged(with event: NSEvent) {
-            updateHover(with: event)
-            activateOnTopEdgePushIfNeeded(with: event)
-        }
-
-        override func mouseExited(with event: NSEvent) {
-            model?.endHover()
-        }
-
-        override func mouseDown(with event: NSEvent) {
-            model?.setPressed(true)
-            updateHover(with: event)
-
-            if activationRect.contains(convert(event.locationInWindow, from: nil)) {
-                onActivate?()
-            }
-        }
-
-        override func mouseUp(with event: NSEvent) {
-            model?.setPressed(false)
-            updateHover(with: event)
-        }
-
-        private func updateHover(with event: NSEvent) {
-            model?.updateHover(location: convert(event.locationInWindow, from: nil), in: bounds.size)
-        }
-
-        private var activationRect: NSRect {
-            let width = min(bounds.width, max(1, activationSize.width))
-            let height = min(bounds.height, max(1, activationSize.height))
-            let x = bounds.midX - (width / 2)
-            let y = bounds.maxY - height
-
-            return NSRect(x: x, y: y, width: width, height: height)
-        }
-
-        private func activateOnTopEdgePushIfNeeded(with event: NSEvent) {
-            guard opensOnTopEdgePush else {
-                return
-            }
-
-            if activationRect.contains(convert(event.locationInWindow, from: nil)) {
-                onActivate?()
-            }
-        }
-    }
-}
-
 final class NotchActivationPanel: NSPanel {
-    var onActivate: (() -> Void)?
-
     override var canBecomeKey: Bool {
         false
     }
 
     override var canBecomeMain: Bool {
         false
-    }
-
-    func activateFromMouse() {
-        onActivate?()
     }
 }
