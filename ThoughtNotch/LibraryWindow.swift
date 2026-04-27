@@ -8,9 +8,17 @@ struct LibraryWindow: View {
         var id: String { rawValue }
     }
 
+    enum PageViewMode: String, CaseIterable, Identifiable {
+        case synthesis = "Synthesis"
+        case distilled = "Distilled"
+
+        var id: String { rawValue }
+    }
+
     @ObservedObject var store: ThoughtStore
     @StateObject private var reorganizer = ThoughtReorganizer()
     @State private var mode: Mode = .distilled
+    @State private var pageViewMode: PageViewMode = .synthesis
     @State private var searchText = ""
     @State private var selectedPageID: UUID?
     @State private var rawSelectionMode = false
@@ -147,6 +155,8 @@ struct LibraryWindow: View {
 
             if mode == .raw {
                 rawBulkToolbar
+            } else {
+                pageViewToolbar
             }
 
             Button {
@@ -159,6 +169,22 @@ struct LibraryWindow: View {
             .disabled(reorganizer.isReorganizing || store.thoughts.isEmpty)
         }
         .padding(12)
+    }
+
+    private var pageViewToolbar: some View {
+        Picker("Page View", selection: $pageViewMode) {
+            Image(systemName: "sparkles")
+                .tag(PageViewMode.synthesis)
+                .help("Synthesis")
+
+            Image(systemName: "doc.text.magnifyingglass")
+                .tag(PageViewMode.distilled)
+                .help("Distilled")
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(width: 82)
+        .help(pageViewMode.rawValue)
     }
 
     @ViewBuilder
@@ -288,6 +314,7 @@ struct LibraryWindow: View {
                 pages: store.pages,
                 thoughts: linkedThoughts(for: selectedPage),
                 childPages: childPages(for: selectedPage.id),
+                viewMode: pageViewMode,
                 store: store,
                 onDelete: {
                     pendingPageDeletion = selectedPage
@@ -541,6 +568,7 @@ private struct PageDetailView: View {
     let pages: [ThoughtPage]
     let thoughts: [Thought]
     let childPages: [ThoughtPage]
+    let viewMode: LibraryWindow.PageViewMode
     let store: ThoughtStore
     let onDelete: () -> Void
     let onSelectPage: (UUID) -> Void
@@ -612,48 +640,11 @@ private struct PageDetailView: View {
                     }
                 }
 
-                synthesisView
-
-                DisclosureGroup {
-                    VStack(alignment: .leading, spacing: 18) {
-                        if !page.bodyMarkdown.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Distilled Notes")
-                                    .font(.headline)
-
-                                MarkdownDocumentView(markdown: page.bodyMarkdown)
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Raw Ideas")
-                                .font(.headline)
-
-                            if thoughts.isEmpty {
-                                Text("No raw thoughts are linked to this page yet.")
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                ForEach(thoughts) { thought in
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(thought.title ?? thought.text)
-                                            .font(.callout.weight(.medium))
-                                        Text(thought.text)
-                                            .font(.callout)
-                                            .foregroundStyle(.secondary)
-                                            .textSelection(.enabled)
-                                        Text(thought.createdAt.formatted(date: .abbreviated, time: .shortened))
-                                            .font(.caption)
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                    .padding(.vertical, 6)
-                                }
-                            }
-                        }
-                    }
-                    .padding(.top, 8)
-                } label: {
-                    Label("Peek Under the Hood", systemImage: "chevron.left.forwardslash.chevron.right")
-                        .font(.headline)
+                switch viewMode {
+                case .synthesis:
+                    synthesisView
+                case .distilled:
+                    distilledView
                 }
             }
             .padding(28)
@@ -667,6 +658,44 @@ private struct PageDetailView: View {
         }
         .onChange(of: page.title) { _, title in
             editedTitle = title
+        }
+    }
+
+    private var distilledView: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if !page.bodyMarkdown.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Distilled Notes")
+                        .font(.headline)
+
+                    MarkdownDocumentView(markdown: page.bodyMarkdown)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Raw Ideas")
+                    .font(.headline)
+
+                if thoughts.isEmpty {
+                    Text("No raw thoughts are linked to this page yet.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(thoughts) { thought in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(thought.title ?? thought.text)
+                                .font(.callout.weight(.medium))
+                            Text(thought.text)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                            Text(thought.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.vertical, 6)
+                    }
+                }
+            }
         }
     }
 
