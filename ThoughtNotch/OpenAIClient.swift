@@ -50,7 +50,7 @@ enum OpenAIClientError: LocalizedError {
 }
 
 @MainActor
-struct OpenAIClient {
+struct OpenAIClient: ThoughtAIProvider {
     private let settings: AISettings
     private let session: URLSession
 
@@ -107,6 +107,50 @@ struct OpenAIClient {
         )
         return try JSONDecoder().decode(ThoughtSynthesisOutput.self, from: Data(outputText.utf8))
     }
+
+    func generateRawText(instructions: String, prompt: String) async throws -> String {
+        let outputText = try await requestOutputText(
+            systemPrompt: instructions,
+            userPrompt: prompt,
+            schemaName: "raw_text",
+            schema: Self.rawTextSchema,
+            exampleJSON: Self.rawTextExampleJSON,
+            timeout: 60,
+            maxTokens: 1024,
+            failureMessage: "AI raw text request failed"
+        )
+        return try JSONDecoder().decode(RawTextOutput.self, from: Data(outputText.utf8)).text
+    }
+
+    func streamRawText(instructions: String, prompt: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task { @MainActor in
+                do {
+                    let text = try await generateRawText(instructions: instructions, prompt: prompt)
+                    continuation.yield(text)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    func suggestTags(for text: String) async throws -> [String] {
+        let outputText = try await requestOutputText(
+            systemPrompt: "Generate concise lowercase tags for private notebook text. Return JSON that exactly matches the schema.",
+            userPrompt: text,
+            schemaName: "tag_suggestions",
+            schema: Self.tagSuggestionSchema,
+            exampleJSON: Self.tagSuggestionExampleJSON,
+            timeout: 30,
+            maxTokens: 256,
+            failureMessage: "AI tag suggestion request failed"
+        )
+        return try JSONDecoder().decode(TagSuggestionOutput.self, from: Data(outputText.utf8)).tags
+    }
+
+    func prewarm() {}
 
     func availableModels() async throws -> [String] {
         var request = authenticatedRequest(url: try endpointURL(path: "models"))
@@ -410,6 +454,14 @@ struct OpenAIClient {
         let data: [Model]
     }
 
+    private struct TagSuggestionOutput: Decodable {
+        let tags: [String]
+    }
+
+    private struct RawTextOutput: Decodable {
+        let text: String
+    }
+
     private struct ReorganizationClientOutput: Decodable {
         struct Page: Decodable {
             let id: String
@@ -495,6 +547,18 @@ struct OpenAIClient {
     private static let synthesisExampleJSON = """
     {
       "synthesisMarkdown": "## Current Shape\\n\\nThe page is collecting launch planning decisions and follow-ups.\\n\\n## Open Loops\\n\\n- Confirm the next owner and timeline."
+    }
+    """
+
+    private static let rawTextExampleJSON = """
+    {
+      "text": "Concise generated text."
+    }
+    """
+
+    private static let tagSuggestionExampleJSON = """
+    {
+      "tags": ["planning", "follow-up"]
     }
     """
 
@@ -666,6 +730,27 @@ struct OpenAIClient {
             "synthesisMarkdown": [
                 "type": "string",
                 "description": "The default markdown view for the page. Use concise markdown, 80-140 words by default, with blank lines between blocks and 2-4 short sections or bullet groups."
+            ]
+        ]
+    ]
+
+    private static let rawTextSchema: [String: Any] = [
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text"],
+        "properties": [
+            "text": ["type": "string"]
+        ]
+    ]
+
+    private static let tagSuggestionSchema: [String: Any] = [
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tags"],
+        "properties": [
+            "tags": [
+                "type": "array",
+                "items": ["type": "string"]
             ]
         ]
     ]

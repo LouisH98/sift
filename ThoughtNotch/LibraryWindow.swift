@@ -884,7 +884,15 @@ private struct PageNode: Identifiable {
 
     static func roots(from pages: [ThoughtPage]) -> [PageNode] {
         let childrenByParentID = Dictionary(grouping: pages, by: \.parentID)
-        let roots = (childrenByParentID[nil] ?? [])
+        let pageIDs = Set(pages.map(\.id))
+        let roots = pages
+            .filter { page in
+                guard let parentID = page.parentID else {
+                    return true
+                }
+
+                return !pageIDs.contains(parentID)
+            }
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
 
         return roots.map { node(for: $0, childrenByParentID: childrenByParentID) }

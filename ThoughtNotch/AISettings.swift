@@ -25,6 +25,7 @@ final class AISettings: ObservableObject {
 
     private enum Keys {
         static let isEnabled = "ai.isEnabled"
+        static let providerKind = "ai.providerKind"
         static let apiBaseURL = "ai.apiBaseURL"
         static let apiEndpoint = "ai.apiEndpoint"
         static let modelID = "ai.modelID"
@@ -34,10 +35,17 @@ final class AISettings: ObservableObject {
     static let defaultAPIBaseURL = "https://api.openai.com/v1"
     static let defaultAPIEndpoint = APIEndpoint.responses
     static let defaultModelID = "gpt-5.4-mini"
+    static let defaultProviderKind = ThoughtAIProviderKind.openAICompatible
 
     @Published var isEnabled: Bool {
         didSet {
             UserDefaults.standard.set(isEnabled, forKey: Keys.isEnabled)
+        }
+    }
+
+    @Published var providerKind: ThoughtAIProviderKind {
+        didSet {
+            UserDefaults.standard.set(providerKind.rawValue, forKey: Keys.providerKind)
         }
     }
 
@@ -73,7 +81,16 @@ final class AISettings: ObservableObject {
     private var isLoadingAPIKey = false
 
     var canProcess: Bool {
-        isEnabled && URL(string: apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
+        guard isEnabled else {
+            return false
+        }
+
+        switch providerKind {
+        case .openAICompatible:
+            return URL(string: apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
+        case .appleFoundationModels:
+            return ThoughtAIProviderFactory.status(for: .appleFoundationModels).isAvailable
+        }
     }
 
     @discardableResult
@@ -98,6 +115,8 @@ final class AISettings: ObservableObject {
 
     private init() {
         isEnabled = UserDefaults.standard.bool(forKey: Keys.isEnabled)
+        providerKind = UserDefaults.standard.string(forKey: Keys.providerKind)
+            .flatMap(ThoughtAIProviderKind.init(rawValue:)) ?? Self.defaultProviderKind
         apiBaseURL = UserDefaults.standard.string(forKey: Keys.apiBaseURL) ?? Self.defaultAPIBaseURL
         apiEndpoint = UserDefaults.standard.string(forKey: Keys.apiEndpoint)
             .flatMap(APIEndpoint.init(rawValue:)) ?? Self.defaultAPIEndpoint

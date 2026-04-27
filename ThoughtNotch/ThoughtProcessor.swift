@@ -75,7 +75,7 @@ final class ThoughtProcessor: ObservableObject {
 
         do {
             let input = makeInput(for: thought)
-            let output = try await OpenAIClient(settings: settings).process(input: input)
+            let output = try await ThoughtAIProviderFactory.provider(settings: settings, store: store).process(input: input)
             let changedPageID = apply(output, to: thought)
             if let changedPageID {
                 await synthesizePageAndAncestors(pageID: changedPageID)
@@ -424,7 +424,7 @@ final class ThoughtProcessor: ObservableObject {
             - Preserve uncertainty. Do not invent facts beyond the provided notes.
             """
 
-            let output = try await OpenAIClient(settings: settings).synthesizePage(input: ThoughtSynthesisInput(prompt: prompt))
+            let output = try await ThoughtAIProviderFactory.provider(settings: settings, store: store).synthesizePage(input: ThoughtSynthesisInput(prompt: prompt))
             store.updatePageSynthesis(
                 pageID: pageID,
                 synthesisMarkdown: clean(output.synthesisMarkdown),

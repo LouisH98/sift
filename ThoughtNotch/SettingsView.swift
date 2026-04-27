@@ -11,6 +11,9 @@ struct SettingsView: View {
     @State private var availableModels: [String] = []
     @State private var isLoadingModels = false
     @State private var modelLoadError: String?
+    @State private var foundationModelsTestOutput: String?
+    @State private var foundationModelsTestError: String?
+    @State private var isTestingFoundationModels = false
     @State private var launchAtLoginStatus = SMAppService.mainApp.status
     @State private var launchAtLoginError: String?
 
@@ -77,20 +80,19 @@ struct SettingsView: View {
             Section("AI Processing") {
                 Toggle("Enable AI processing", isOn: $settings.isEnabled)
 
-                TextField("API base URL", text: $settings.apiBaseURL)
-                    .textFieldStyle(.roundedBorder)
-
-                Picker("API type", selection: $settings.apiEndpoint) {
-                    ForEach(AISettings.APIEndpoint.allCases) { endpoint in
-                        Text(endpoint.displayName).tag(endpoint)
+                Picker("Provider", selection: $settings.providerKind) {
+                    ForEach(ThoughtAIProviderKind.allCases) { provider in
+                        Text(provider.displayName).tag(provider)
                     }
                 }
                 .pickerStyle(.menu)
 
-                SecureField("API key", text: $settings.apiKey)
-                    .textFieldStyle(.roundedBorder)
-
-                modelSelector
+                switch settings.providerKind {
+                case .openAICompatible:
+                    openAICompatibleSettings
+                case .appleFoundationModels:
+                    appleFoundationModelsSettings
+                }
 
                 HStack {
                     Button(processor.isBackfilling ? "Processing..." : "Process unprocessed thoughts") {
@@ -126,6 +128,17 @@ struct SettingsView: View {
         }
         .onChange(of: todoSettings.reminderLeadTimeMinutes) { _, _ in
             syncActionReminders()
+        }
+        .onChange(of: settings.providerKind) { _, newValue in
+            availableModels = []
+            modelLoadError = nil
+            foundationModelsTestOutput = nil
+            foundationModelsTestError = nil
+            if newValue == .openAICompatible {
+                Task {
+                    await loadModelsIfNeeded()
+                }
+            }
         }
     }
 
@@ -163,6 +176,69 @@ struct SettingsView: View {
             get: { appearanceSettings.glowColor },
             set: { appearanceSettings.setGlowColor($0) }
         )
+    }
+
+    @ViewBuilder
+    private var openAICompatibleSettings: some View {
+        TextField("API base URL", text: $settings.apiBaseURL)
+            .textFieldStyle(.roundedBorder)
+
+        Picker("API type", selection: $settings.apiEndpoint) {
+            ForEach(AISettings.APIEndpoint.allCases) { endpoint in
+                Text(endpoint.displayName).tag(endpoint)
+            }
+        }
+        .pickerStyle(.menu)
+
+        SecureField("API key", text: $settings.apiKey)
+            .textFieldStyle(.roundedBorder)
+
+        modelSelector
+    }
+
+    @ViewBuilder
+    private var appleFoundationModelsSettings: some View {
+        let status = ThoughtAIProviderFactory.status(for: .appleFoundationModels)
+
+        VStack(alignment: .leading, spacing: 8) {
+            Label(status.title, systemImage: status.isAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(status.isAvailable ? .green : .orange)
+
+            Text(status.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Text("Uses SystemLanguageModel.default. Apple updates model behavior through OS releases; custom model selection is not available.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Button("Prewarm") {
+                    ThoughtAIProviderFactory.provider(settings: settings, store: store).prewarm()
+                    foundationModelsTestOutput = "Prewarm requested."
+                    foundationModelsTestError = nil
+                }
+                .disabled(!status.isAvailable)
+
+                Button(isTestingFoundationModels ? "Testing..." : "Test local generation") {
+                    Task {
+                        await testFoundationModels()
+                    }
+                }
+                .disabled(!status.isAvailable || isTestingFoundationModels)
+            }
+
+            if let foundationModelsTestOutput {
+                Text(foundationModelsTestOutput)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            } else if let foundationModelsTestError {
+                Text(foundationModelsTestError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
     }
 
     @ViewBuilder
@@ -210,6 +286,10 @@ struct SettingsView: View {
     }
 
     private func loadModelsIfNeeded() async {
+        guard settings.providerKind == .openAICompatible else {
+            return
+        }
+
         guard availableModels.isEmpty else {
             return
         }
@@ -218,6 +298,10 @@ struct SettingsView: View {
     }
 
     private func loadModels(force: Bool) async {
+        guard settings.providerKind == .openAICompatible else {
+            return
+        }
+
         guard force || availableModels.isEmpty else {
             return
         }
@@ -242,6 +326,24 @@ struct SettingsView: View {
         }
 
         isLoadingModels = false
+    }
+
+    private func testFoundationModels() async {
+        isTestingFoundationModels = true
+        foundationModelsTestOutput = nil
+        foundationModelsTestError = nil
+
+        do {
+            let output = try await ThoughtAIProviderFactory.provider(settings: settings, store: store).generateRawText(
+                instructions: "You write brief app status labels.",
+                prompt: "Return exactly this word: Ready"
+            )
+            foundationModelsTestOutput = output
+        } catch {
+            foundationModelsTestError = error.localizedDescription
+        }
+
+        isTestingFoundationModels = false
     }
 
     private func setLaunchAtLogin(_ enabled: Bool) {

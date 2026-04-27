@@ -37,7 +37,7 @@ final class ThoughtReorganizer: ObservableObject {
 
         do {
             let input = ThoughtReorganizationInput(prompt: makePrompt())
-            let proposal = try await OpenAIClient(settings: settings).reorganize(input: input)
+            let proposal = try await ThoughtAIProviderFactory.provider(settings: settings, store: store).reorganize(input: input)
             lastError = nil
             return proposal
         } catch {
