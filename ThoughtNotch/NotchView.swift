@@ -25,6 +25,23 @@ struct NotchView: View {
     private let openSize = CGSize(width: 540, height: 184)
     private let topBlurBleed: CGFloat = 32
     private let visibleStageHeight: CGFloat = 240
+    private let openingBlurRadius: CGFloat = 14
+    private let contentDismissalBlurRadius: CGFloat = 22
+
+    private var isNotchedDisplay: Bool {
+        !model.hideClosedNotch
+    }
+
+    private var paneBlurRadius: CGFloat {
+        model.isBlurred && !isNotchedDisplay ? openingBlurRadius : 0
+    }
+
+    private var contentBlurRadius: CGFloat {
+        let presentationBlurRadius = model.isBlurred && isNotchedDisplay ? openingBlurRadius : 0
+        let dismissalBlurRadius: CGFloat = model.isContentPresented ? 0 : contentDismissalBlurRadius
+
+        return max(presentationBlurRadius, dismissalBlurRadius)
+    }
 
     private var currentSize: CGSize {
         if !model.isOpen && model.hideClosedNotch {
@@ -76,7 +93,7 @@ struct NotchView: View {
                 }
                 .shadow(color: .black.opacity(model.isOpen ? 0.7 : 0), radius: model.isOpen ? 9 : 0, x: 0, y: 6)
                 .opacity((!model.isOpen && model.hideClosedNotch) ? 0 : 1)
-                .blur(radius: model.isBlurred ? 14 : 0)
+                .blur(radius: paneBlurRadius)
                 .animation(model.isOpen ? NotchAnimationModel.openAnimation : NotchAnimationModel.closeAnimation, value: model.isOpen)
                 .animation(NotchAnimationModel.blurAnimation, value: model.isBlurred)
             }
@@ -90,7 +107,7 @@ struct NotchView: View {
     @ViewBuilder
     private var notchBody: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if model.isOpen {
+            if model.isContentMounted {
                 VStack(alignment: .leading, spacing: 10) {
                     pageChrome
 
@@ -126,6 +143,15 @@ struct NotchView: View {
                             .animation(.smooth(duration: 0.35))
                     )
                     .zIndex(1)
+                    .frame(
+                        width: openSize.width - 24,
+                        height: openSize.height,
+                        alignment: .topLeading
+                    )
+                    .opacity(model.isContentPresented ? 1 : 0)
+                    .blur(radius: model.isContentPresented ? 0 : contentDismissalBlurRadius)
+                    .animation(NotchAnimationModel.contentDismissalAnimation, value: model.isContentPresented)
+                    .allowsHitTesting(model.isContentPresented)
             } else {
                 Rectangle()
                     .fill(.clear)
@@ -138,7 +164,9 @@ struct NotchView: View {
             model.isOpen ? 12 : bottomCornerRadius
         )
         .padding(.bottom, model.isOpen && model.selectedPage != .capture ? 12 : 0)
+        .blur(radius: contentBlurRadius)
         .animation(NotchAnimationModel.contentAnimation, value: model.isOpen)
+        .animation(NotchAnimationModel.blurAnimation, value: model.isBlurred)
     }
 
     private var pageChrome: some View {

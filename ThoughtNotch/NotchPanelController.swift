@@ -17,6 +17,7 @@ final class NotchPanelController {
     private var panel: NotchPanel?
     private var activationSurfaces: [ActivationSurface] = []
     private var pendingOrderOut: DispatchWorkItem?
+    private var targetIsOpen = false
     private var keyEventMonitor: Any?
     private var scrollEventMonitor: Any?
     private var localActivationClickMonitor: Any?
@@ -64,7 +65,7 @@ final class NotchPanelController {
     }
 
     func toggle() {
-        isVisible ? hide() : show()
+        targetIsOpen ? hide() : show()
     }
 
     func movePage(_ delta: Int) {
@@ -86,16 +87,21 @@ final class NotchPanelController {
     }
 
     func show(on sourceScreen: NSScreen? = nil) {
+        targetIsOpen = true
         pendingOrderOut?.cancel()
         pendingOrderOut = nil
 
         let panel = panel ?? makePanel()
         self.panel = panel
+        let wasVisible = panel.isVisible
 
         let screen = sourceScreen ?? activeScreen()
         let finalFrame = frame(on: screen)
 
-        animationModel.prepareForPresentation(hideClosedNotch: shouldHideClosedNotch(on: screen))
+        if !wasVisible {
+            animationModel.prepareForPresentation(hideClosedNotch: shouldHideClosedNotch(on: screen))
+        }
+
         panel.setFrame(finalFrame, display: true)
         panel.alphaValue = 1
         panel.orderFrontRegardless()
@@ -106,7 +112,7 @@ final class NotchPanelController {
         PageNavigationShortcut.activateRegisteredShortcuts()
 
         DispatchQueue.main.async { [weak self] in
-            guard let self else {
+            guard let self, self.targetIsOpen else {
                 return
             }
 
@@ -118,6 +124,10 @@ final class NotchPanelController {
     }
 
     func hide() {
+        targetIsOpen = false
+        pendingOrderOut?.cancel()
+        pendingOrderOut = nil
+
         guard let panel else {
             return
         }
@@ -125,12 +135,13 @@ final class NotchPanelController {
         animationModel.close()
 
         let orderOut = DispatchWorkItem { [weak self, weak panel] in
-            guard let self, let panel, !self.animationModel.isOpen else {
+            guard let self, let panel, !self.targetIsOpen, !self.animationModel.isOpen else {
                 return
             }
 
             panel.orderOut(nil)
             panel.alphaValue = 1
+            self.pendingOrderOut = nil
             self.stopKeyEventMonitor()
             self.stopScrollEventMonitor()
             PageNavigationShortcut.deactivateRegisteredShortcuts()
@@ -238,7 +249,7 @@ final class NotchPanelController {
     }
 
     private func handlePassiveActivationEvent(type: NSEvent.EventType, mouseLocation: NSPoint, deltaX: CGFloat, deltaY: CGFloat) {
-        if isVisible {
+        if targetIsOpen {
             resetTopEdgePush()
             endActivationHover()
 
@@ -271,7 +282,7 @@ final class NotchPanelController {
     }
 
     private func handleActivationClick(at mouseLocation: NSPoint) {
-        guard !isVisible else {
+        guard !targetIsOpen else {
             return
         }
 
@@ -314,7 +325,7 @@ final class NotchPanelController {
     }
 
     private func openFromMouseActivation(on screen: NSScreen, at date: Date = Date()) {
-        guard !isVisible else {
+        guard !targetIsOpen else {
             return
         }
 
@@ -672,19 +683,34 @@ private extension NSView {
 final class NotchAnimationModel: ObservableObject {
     @Published var isOpen = false
     @Published var isBlurred = true
+    @Published private(set) var isContentMounted = false
+    @Published private(set) var isContentPresented = false
     @Published var selectedPage: NotchPage = .capture
     @Published private(set) var hideClosedNotch = true
+    private var pendingContentUnmount: DispatchWorkItem?
 
     func prepareForPresentation(hideClosedNotch: Bool) {
+        pendingContentUnmount?.cancel()
+        pendingContentUnmount = nil
         self.hideClosedNotch = hideClosedNotch
         isOpen = false
         isBlurred = true
+        isContentMounted = false
+        isContentPresented = false
         selectedPage = .capture
     }
 
     func open() {
+        pendingContentUnmount?.cancel()
+        pendingContentUnmount = nil
+        isContentMounted = true
+
         withAnimation(Self.openAnimation) {
             isOpen = true
+        }
+
+        withAnimation(Self.contentDismissalAnimation.delay(0.04)) {
+            isContentPresented = true
         }
 
         withAnimation(Self.blurAnimation.delay(0.08)) {
@@ -693,6 +719,10 @@ final class NotchAnimationModel: ObservableObject {
     }
 
     func close() {
+        withAnimation(Self.contentDismissalAnimation) {
+            isContentPresented = false
+        }
+
         withAnimation(Self.blurAnimation) {
             isBlurred = true
         }
@@ -700,6 +730,18 @@ final class NotchAnimationModel: ObservableObject {
         withAnimation(Self.closeAnimation) {
             isOpen = false
         }
+
+        let unmount = DispatchWorkItem { [weak self] in
+            guard let self, !self.isOpen else {
+                return
+            }
+
+            self.isContentMounted = false
+            self.pendingContentUnmount = nil
+        }
+
+        pendingContentUnmount = unmount
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: unmount)
     }
 
     func movePage(_ delta: Int) {
@@ -713,11 +755,11 @@ final class NotchAnimationModel: ObservableObject {
     }
 
     static var openAnimation: Animation {
-        .interactiveSpring(response: 0.38, dampingFraction: 0.8, blendDuration: 0)
+        .interactiveSpring(response: 0.38, dampingFraction: 0.8, blendDuration: 0.12)
     }
 
     static var closeAnimation: Animation {
-        .spring(response: 0.45, dampingFraction: 1.0, blendDuration: 0)
+        .interactiveSpring(response: 0.36, dampingFraction: 1.0, blendDuration: 0.08)
     }
 
     static var blurAnimation: Animation {
@@ -730,6 +772,10 @@ final class NotchAnimationModel: ObservableObject {
         } else {
             .timingCurve(0.16, 1, 0.3, 1, duration: 0.7)
         }
+    }
+
+    static var contentDismissalAnimation: Animation {
+        .smooth(duration: 0.16)
     }
 }
 
