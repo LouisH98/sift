@@ -431,11 +431,11 @@ final class NotchPanelController {
 
         switch event.keyCode {
         case 126:
-            actionNavigationModel.moveSelection(-1, in: store.openActionItems)
+            actionNavigationModel.moveSelection(-1, in: store.openActionItems + store.recentlyCompletedActionItems)
         case 125:
-            actionNavigationModel.moveSelection(1, in: store.openActionItems)
+            actionNavigationModel.moveSelection(1, in: store.openActionItems + store.recentlyCompletedActionItems)
         case 36, 49, 76:
-            actionNavigationModel.completeSelected(in: store.openActionItems, store: store)
+            actionNavigationModel.toggleSelected(in: store.openActionItems + store.recentlyCompletedActionItems, store: store)
         default:
             return false
         }

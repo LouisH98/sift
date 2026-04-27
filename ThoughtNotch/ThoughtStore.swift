@@ -45,6 +45,25 @@ final class ThoughtStore: ObservableObject {
             .sorted(by: actionItemSort)
     }
 
+    var recentlyCompletedActionItems: [ActionItem] {
+        actionItems
+            .filter { item in
+                guard item.isDone, let completedAt = item.completedAt else {
+                    return false
+                }
+
+                return Calendar.current.isDateInToday(completedAt)
+            }
+            .sorted { lhs, rhs in
+                switch (lhs.completedAt, rhs.completedAt) {
+                case let (lhsCompletedAt?, rhsCompletedAt?) where lhsCompletedAt != rhsCompletedAt:
+                    return lhsCompletedAt > rhsCompletedAt
+                default:
+                    return actionItemSort(lhs, rhs)
+                }
+            }
+    }
+
     var unprocessedThoughtCount: Int {
         thoughts.filter { $0.processedAt == nil }.count
     }

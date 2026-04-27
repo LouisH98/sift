@@ -35,7 +35,7 @@ final class ActionListNavigationModel: ObservableObject {
         selectedActionID = ids[nextIndex]
     }
 
-    func completeSelected(in items: [ActionItem], store: ThoughtStore) {
+    func toggleSelected(in items: [ActionItem], store: ThoughtStore) {
         guard
             let selectedActionID,
             let item = items.first(where: { $0.id == selectedActionID })
@@ -43,10 +43,25 @@ final class ActionListNavigationModel: ObservableObject {
             return
         }
 
-        complete(item, store: store)
+        toggle(item, store: store)
     }
 
-    func complete(_ item: ActionItem, store: ThoughtStore) {
+    func toggle(_ item: ActionItem, store: ThoughtStore) {
+        if item.isDone {
+            restore(item, store: store)
+        } else {
+            complete(item, store: store)
+        }
+    }
+
+    private func restore(_ item: ActionItem, store: ThoughtStore) {
+        withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) {
+            store.setActionItemDone(item.id, isDone: false)
+            ensureSelection(in: store.visibleActionItemsForChecklist)
+        }
+    }
+
+    private func complete(_ item: ActionItem, store: ThoughtStore) {
         guard !completingActionIDs.contains(item.id) else {
             return
         }
@@ -63,7 +78,7 @@ final class ActionListNavigationModel: ObservableObject {
             withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) {
                 store.setActionItemDone(item.id, isDone: true)
                 self.completingActionIDs.remove(item.id)
-                self.ensureSelection(in: store.openActionItems)
+                self.ensureSelection(in: store.visibleActionItemsForChecklist)
             }
         }
     }
@@ -74,8 +89,30 @@ struct ActionChecklistView: View {
     @ObservedObject var navigationModel: ActionListNavigationModel
     let onCancel: () -> Void
 
-    private var visibleActionItems: [ActionItem] {
+    @State private var dailyRefreshDate = Date()
+
+    private var openActionItems: [ActionItem] {
         store.openActionItems
+    }
+
+    private var recentlyCompletedActionItems: [ActionItem] {
+        _ = dailyRefreshDate
+        return store.recentlyCompletedActionItems
+    }
+
+    private var visibleActionItems: [ActionItem] {
+        openActionItems + recentlyCompletedActionItems
+    }
+
+    private var actionRows: [ActionListRow] {
+        var rows = openActionItems.map { ActionListRow.action($0, isRecentlyCompleted: false) }
+
+        if !recentlyCompletedActionItems.isEmpty {
+            rows.append(.divider)
+            rows.append(contentsOf: recentlyCompletedActionItems.map { ActionListRow.action($0, isRecentlyCompleted: true) })
+        }
+
+        return rows
     }
 
     var body: some View {
@@ -89,7 +126,7 @@ struct ActionChecklistView: View {
 
                 Spacer()
 
-                Text("\(visibleActionItems.count)")
+                Text("\(openActionItems.count)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.52))
             }
@@ -109,29 +146,37 @@ struct ActionChecklistView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         ScrollViewReader { proxy in
                             VStack(alignment: .leading, spacing: 8) {
-                                ForEach(visibleActionItems) { item in
-                                    ActionRow(
-                                        item: item,
-                                        sourceThought: store.thought(with: item.thoughtID),
-                                        isSelected: navigationModel.selectedActionID == item.id,
-                                        isCompleting: navigationModel.completingActionIDs.contains(item.id),
-                                        onComplete: {
-                                            navigationModel.complete(item, store: store)
-                                        }
-                                    )
-                                    .id(item.id)
-                                    .transition(
-                                        .asymmetric(
-                                            insertion: .opacity.combined(with: .move(edge: .top)),
-                                            removal: .opacity
-                                                .combined(with: .scale(scale: 0.92, anchor: .top))
-                                                .combined(with: .move(edge: .trailing))
+                                ForEach(actionRows) { row in
+                                    switch row {
+                                    case let .action(item, isRecentlyCompleted):
+                                        ActionRow(
+                                            item: item,
+                                            sourceThought: store.thought(with: item.thoughtID),
+                                            isSelected: navigationModel.selectedActionID == item.id,
+                                            isCompleting: navigationModel.completingActionIDs.contains(item.id),
+                                            isRecentlyCompleted: isRecentlyCompleted,
+                                            onToggle: {
+                                                navigationModel.toggle(item, store: store)
+                                            }
                                         )
-                                    )
+                                        .id(item.id)
+                                        .transition(
+                                            .asymmetric(
+                                                insertion: .opacity.combined(with: .move(edge: .top)),
+                                                removal: .opacity
+                                                    .combined(with: .scale(scale: 0.92, anchor: .top))
+                                                    .combined(with: .move(edge: .trailing))
+                                            )
+                                        )
+                                    case .divider:
+                                        RecentlyCompletedDivider()
+                                            .id(row.id)
+                                            .transition(.opacity.combined(with: .move(edge: .top)))
+                                    }
                                 }
                             }
                             .padding(.trailing, 4)
-                            .animation(.spring(response: 0.34, dampingFraction: 0.82), value: visibleActionItems)
+                            .animation(.spring(response: 0.34, dampingFraction: 0.82), value: actionRows)
                             .animation(.spring(response: 0.28, dampingFraction: 0.78), value: navigationModel.selectedActionID)
                             .onChange(of: navigationModel.selectedActionID) { _, id in
                                 guard let id else {
@@ -152,11 +197,14 @@ struct ActionChecklistView: View {
         .background(
             ActionKeyboardCatcher(
                 onMove: { navigationModel.moveSelection($0, in: visibleActionItems) },
-                onComplete: { navigationModel.completeSelected(in: visibleActionItems, store: store) },
+                onToggle: { navigationModel.toggleSelected(in: visibleActionItems, store: store) },
                 onCancel: onCancel
             )
             .frame(width: 0, height: 0)
         )
+        .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { date in
+            dailyRefreshDate = date
+        }
         .onAppear {
             navigationModel.ensureSelection(in: visibleActionItems)
         }
@@ -171,41 +219,43 @@ private struct ActionRow: View {
     let sourceThought: Thought?
     let isSelected: Bool
     let isCompleting: Bool
-    let onComplete: () -> Void
+    let isRecentlyCompleted: Bool
+    let onToggle: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Button {
-                onComplete()
+                onToggle()
             } label: {
                 ZStack {
                     Circle()
-                        .strokeBorder(.white.opacity(isCompleting ? 0 : 0.58), lineWidth: 1.4)
-                        .scaleEffect(isCompleting ? 0.72 : 1)
-                        .opacity(isCompleting ? 0 : 1)
+                        .strokeBorder(.white.opacity(showCompletedState ? 0 : 0.58), lineWidth: 1.4)
+                        .scaleEffect(showCompletedState ? 0.72 : 1)
+                        .opacity(showCompletedState ? 0 : 1)
 
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.green)
-                        .scaleEffect(isCompleting ? 1 : 0.3)
-                        .opacity(isCompleting ? 1 : 0)
+                        .scaleEffect(showCompletedState ? 1 : 0.3)
+                        .opacity(showCompletedState ? 1 : 0)
                 }
                 .frame(width: 18, height: 18)
-                .animation(.spring(response: 0.22, dampingFraction: 0.52), value: isCompleting)
+                .animation(.spring(response: 0.22, dampingFraction: 0.52), value: showCompletedState)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(isCompleting ? .green : .white.opacity(0.58))
+            .foregroundStyle(showCompletedState ? .green : .white.opacity(0.58))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.title)
                     .font(.callout.weight(.medium))
-                    .foregroundStyle(isCompleting ? .green.opacity(0.96) : .white.opacity(0.92))
+                    .foregroundStyle(primaryTextColor)
+                    .strikethrough(isRecentlyCompleted, color: .white.opacity(0.32))
                     .lineLimit(1)
 
                 if let detail = item.detail {
                     Text(detail)
                         .font(.caption)
-                        .foregroundStyle(isCompleting ? .green.opacity(0.56) : .white.opacity(0.56))
+                        .foregroundStyle(secondaryTextColor)
                         .lineLimit(1)
                 }
 
@@ -225,7 +275,7 @@ private struct ActionRow: View {
                 if let sourceText {
                     Text(sourceText)
                         .font(.caption2)
-                        .foregroundStyle(isCompleting ? .green.opacity(0.36) : .white.opacity(0.34))
+                        .foregroundStyle(sourceTextColor)
                         .lineLimit(1)
                 }
             }
@@ -245,8 +295,36 @@ private struct ActionRow: View {
         .scaleEffect(isCompleting ? 0.985 : 1, anchor: .center)
         .contentShape(Rectangle())
         .onTapGesture {
-            onComplete()
+            onToggle()
         }
+    }
+
+    private var showCompletedState: Bool {
+        isCompleting || isRecentlyCompleted
+    }
+
+    private var primaryTextColor: Color {
+        if isCompleting {
+            return .green.opacity(0.96)
+        }
+
+        return isRecentlyCompleted ? .white.opacity(0.48) : .white.opacity(0.92)
+    }
+
+    private var secondaryTextColor: Color {
+        if isCompleting {
+            return .green.opacity(0.56)
+        }
+
+        return isRecentlyCompleted ? .white.opacity(0.34) : .white.opacity(0.56)
+    }
+
+    private var sourceTextColor: Color {
+        if isCompleting {
+            return .green.opacity(0.36)
+        }
+
+        return isRecentlyCompleted ? .white.opacity(0.24) : .white.opacity(0.34)
     }
 
     private var sourceText: String? {
@@ -287,7 +365,7 @@ private struct ActionRow: View {
     }
 
     private func dueIconColor(for dueAt: Date) -> Color {
-        if isCompleting {
+        if showCompletedState {
             return .green.opacity(0.48)
         }
 
@@ -295,7 +373,7 @@ private struct ActionRow: View {
     }
 
     private func dueTextColor(for dueAt: Date) -> Color {
-        if isCompleting {
+        if showCompletedState {
             return .green.opacity(0.56)
         }
 
@@ -311,6 +389,40 @@ private struct ActionRow: View {
     }
 }
 
+private enum ActionListRow: Identifiable, Hashable {
+    case action(ActionItem, isRecentlyCompleted: Bool)
+    case divider
+
+    var id: String {
+        switch self {
+        case let .action(item, _):
+            return "action-\(item.id.uuidString)"
+        case .divider:
+            return "recently-completed-divider"
+        }
+    }
+}
+
+private struct RecentlyCompletedDivider: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(.white.opacity(0.16))
+                .frame(height: 1)
+
+            Text("Completed today")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.42))
+                .lineLimit(1)
+
+            Rectangle()
+                .fill(.white.opacity(0.16))
+                .frame(height: 1)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
 private extension DateFormatter {
     static let actionDueDate: DateFormatter = {
         let formatter = DateFormatter()
@@ -322,21 +434,21 @@ private extension DateFormatter {
 
 private struct ActionKeyboardCatcher: NSViewRepresentable {
     let onMove: (Int) -> Void
-    let onComplete: () -> Void
+    let onToggle: () -> Void
     let onCancel: () -> Void
 
     func makeNSView(context: Context) -> ActionKeyView {
         let view = ActionKeyView()
         view.identifier = .thoughtNotchActionKeyboardCatcher
         view.onMove = onMove
-        view.onComplete = onComplete
+        view.onToggle = onToggle
         view.onCancel = onCancel
         return view
     }
 
     func updateNSView(_ view: ActionKeyView, context: Context) {
         view.onMove = onMove
-        view.onComplete = onComplete
+        view.onToggle = onToggle
         view.onCancel = onCancel
 
         DispatchQueue.main.async {
@@ -350,7 +462,7 @@ private struct ActionKeyboardCatcher: NSViewRepresentable {
 
     final class ActionKeyView: NSView {
         var onMove: ((Int) -> Void)?
-        var onComplete: (() -> Void)?
+        var onToggle: (() -> Void)?
         var onCancel: (() -> Void)?
 
         override var acceptsFirstResponder: Bool {
@@ -364,7 +476,7 @@ private struct ActionKeyboardCatcher: NSViewRepresentable {
             case 125:
                 onMove?(1)
             case 36, 49, 76:
-                onComplete?()
+                onToggle?()
             case 53:
                 onCancel?()
             default:
@@ -376,4 +488,10 @@ private struct ActionKeyboardCatcher: NSViewRepresentable {
 
 extension NSUserInterfaceItemIdentifier {
     static let thoughtNotchActionKeyboardCatcher = Self("ThoughtNotchActionKeyboardCatcher")
+}
+
+private extension ThoughtStore {
+    var visibleActionItemsForChecklist: [ActionItem] {
+        openActionItems + recentlyCompletedActionItems
+    }
 }
