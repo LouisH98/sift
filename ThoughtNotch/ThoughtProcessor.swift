@@ -21,13 +21,19 @@ final class ThoughtProcessor: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private var queuedThoughtIDs: Set<UUID> = []
     @Published private var queuedPageSynthesisIDs: Set<UUID> = []
+    @Published private var pendingSynthesisRefresh = false
 
     private let store: ThoughtStore
     private let settings: AISettings
     private let synthesisPromptVersion = "synthesis-v2-compact-markdown"
+    private var isRefreshingStalePages = false
 
     var isProcessing: Bool {
-        isBackfilling || !queuedThoughtIDs.isEmpty || !queuedPageSynthesisIDs.isEmpty
+        isBackfilling || !queuedThoughtIDs.isEmpty || !queuedPageSynthesisIDs.isEmpty || pendingSynthesisRefresh
+    }
+
+    private var isDistilling: Bool {
+        isBackfilling || !queuedThoughtIDs.isEmpty
     }
 
     private init() {
@@ -49,6 +55,7 @@ final class ThoughtProcessor: ObservableObject {
         Task { @MainActor in
             await process(thoughtID: thought.id)
             queuedThoughtIDs.remove(thought.id)
+            await synthesizeDeferredPagesIfIdle()
         }
     }
 
@@ -65,6 +72,7 @@ final class ThoughtProcessor: ObservableObject {
             }
 
             isBackfilling = false
+            await synthesizeDeferredPagesIfIdle()
         }
     }
 
@@ -78,7 +86,7 @@ final class ThoughtProcessor: ObservableObject {
             let output = try await ThoughtAIProviderFactory.provider(settings: settings, store: store).process(input: input)
             let changedPageID = apply(output, to: thought)
             if let changedPageID {
-                await synthesizePageAndAncestors(pageID: changedPageID)
+                await requestPageSynthesisAndAncestors(pageID: changedPageID)
             }
             lastError = nil
         } catch {
@@ -93,15 +101,73 @@ final class ThoughtProcessor: ObservableObject {
             return
         }
 
+        guard !isDistilling else {
+            pendingSynthesisRefresh = true
+            return
+        }
+
+        guard !isRefreshingStalePages else {
+            pendingSynthesisRefresh = true
+            return
+        }
+
         Task { @MainActor in
+            guard !isDistilling else {
+                pendingSynthesisRefresh = true
+                return
+            }
+
+            await synthesizeStalePagesNow()
+        }
+    }
+
+    private func synthesizeStalePagesNow() async {
+        guard settings.canProcess, !isRefreshingStalePages else {
+            return
+        }
+
+        isRefreshingStalePages = true
+        defer {
+            isRefreshingStalePages = false
+        }
+
+        repeat {
+            pendingSynthesisRefresh = false
+
             let pages = store.pages
                 .filter(needsSynthesis)
                 .sorted { pageDepth($0) > pageDepth($1) }
 
             for page in pages {
+                guard !isDistilling else {
+                    pendingSynthesisRefresh = true
+                    return
+                }
+
                 await synthesizePageAndAncestors(pageID: page.id)
             }
+        } while pendingSynthesisRefresh && !isDistilling
+    }
+
+    private func requestPageSynthesisAndAncestors(pageID: UUID) async {
+        guard settings.canProcess else {
+            return
         }
+
+        guard !isDistilling else {
+            pendingSynthesisRefresh = true
+            return
+        }
+
+        await synthesizePageAndAncestors(pageID: pageID)
+    }
+
+    private func synthesizeDeferredPagesIfIdle() async {
+        guard pendingSynthesisRefresh, !isDistilling else {
+            return
+        }
+
+        await synthesizeStalePagesNow()
     }
 
     private func makeInput(for thought: Thought) -> ThoughtProcessingInput {
@@ -379,6 +445,11 @@ final class ThoughtProcessor: ObservableObject {
     }
 
     private func synthesizePageAndAncestors(pageID: UUID) async {
+        guard !isDistilling else {
+            pendingSynthesisRefresh = true
+            return
+        }
+
         var ids: [UUID] = []
         var currentID: UUID? = pageID
 
@@ -388,12 +459,20 @@ final class ThoughtProcessor: ObservableObject {
         }
 
         for id in ids {
+            guard !isDistilling else {
+                pendingSynthesisRefresh = true
+                return
+            }
+
             await synthesize(pageID: id)
         }
     }
 
     private func synthesize(pageID: UUID) async {
-        guard settings.canProcess, !queuedPageSynthesisIDs.contains(pageID), let page = store.page(with: pageID) else {
+        guard settings.canProcess, !isDistilling, !queuedPageSynthesisIDs.contains(pageID), let page = store.page(with: pageID) else {
+            if isDistilling {
+                pendingSynthesisRefresh = true
+            }
             return
         }
 
@@ -404,9 +483,6 @@ final class ThoughtProcessor: ObservableObject {
         }
 
         queuedPageSynthesisIDs.insert(pageID)
-        defer {
-            queuedPageSynthesisIDs.remove(pageID)
-        }
 
         do {
             let prompt = """
@@ -430,10 +506,16 @@ final class ThoughtProcessor: ObservableObject {
                 synthesisMarkdown: clean(output.synthesisMarkdown),
                 sourceHash: sourceHash
             )
+            if let updatedPage = store.page(with: pageID), needsSynthesis(updatedPage) {
+                pendingSynthesisRefresh = true
+            }
             lastError = nil
         } catch {
             lastError = error.localizedDescription
         }
+
+        queuedPageSynthesisIDs.remove(pageID)
+        await synthesizeDeferredPagesIfIdle()
     }
 
     private func needsSynthesis(_ page: ThoughtPage) -> Bool {
