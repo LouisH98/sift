@@ -107,7 +107,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 backing: .buffered,
                 defer: false
             )
-            window.title = "Sift Library"
+            window.title = "Sift"
+            window.toolbarStyle = .unifiedCompact
+            window.appearance = NSAppearance(named: .darkAqua)
             window.center()
             window.contentView = NSHostingView(rootView: LibraryWindow(store: store))
             window.isReleasedWhenClosed = false

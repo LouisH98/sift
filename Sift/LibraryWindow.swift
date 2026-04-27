@@ -36,7 +36,6 @@ struct LibraryWindow: View {
     @State private var pendingBulkThoughtDeletion = false
     @State private var pendingPageDeletion: ThoughtPage?
     @State private var reorganizationProposal: ReorganizationProposal?
-    @Namespace private var toolbarGlassNamespace
 
     private var filteredThoughts: [Thought] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -54,22 +53,10 @@ struct LibraryWindow: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            toolbar
-
-            notebookView
-        }
+        notebookView
         .frame(minWidth: 760, minHeight: 520)
-        .background {
-            LinearGradient(
-                colors: [
-                    Color.accentColor.opacity(0.08),
-                    Color.clear
-                ],
-                startPoint: .top,
-                endPoint: .center
-            )
-        }
+        .background(LibraryPalette.windowBackground)
+        .preferredColorScheme(.dark)
         .onAppear {
             ensureSelection()
             ThoughtProcessor.shared.synthesizeStalePages()
@@ -146,125 +133,73 @@ struct LibraryWindow: View {
                 }
             )
         }
+        .navigationTitle("Sift")
+        .toolbar {
+            libraryToolbar
+        }
+        .toolbarBackground(LibraryPalette.detailBackground, for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
+        .searchable(text: $searchText, placement: .toolbar, prompt: "Search thoughts")
     }
 
-    private var toolbar: some View {
-        GlassEffectContainer(spacing: 12) {
-            HStack(spacing: 10) {
-                modeControl
-
-                searchControl
-
-                Spacer(minLength: 12)
-
-                if let error = reorganizer.lastError {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .lineLimit(1)
-                }
-
-                if mode == .raw {
-                    rawBulkToolbar
-                } else {
-                    pageViewToolbar
-                }
-
-                Button {
-                    Task {
-                        reorganizationProposal = await reorganizer.makeProposal()
-                    }
-                } label: {
-                    Label(reorganizer.isReorganizing ? "Tidying..." : "Tidy", systemImage: "wand.and.sparkles")
-                }
-                .buttonStyle(.glassProminent)
-                .disabled(reorganizer.isReorganizing || store.thoughts.isEmpty)
-            }
+    @ToolbarContentBuilder
+    private var libraryToolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            modeControl
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 10)
+
+        ToolbarItemGroup(placement: .primaryAction) {
+            if let error = reorganizer.lastError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+            }
+
+            if mode == .raw {
+                rawBulkToolbar
+            } else {
+                pageViewToolbar
+            }
+
+            Button {
+                Task {
+                    reorganizationProposal = await reorganizer.makeProposal()
+                }
+            } label: {
+                Label(reorganizer.isReorganizing ? "Tidying..." : "Tidy", systemImage: reorganizer.isReorganizing ? "hourglass" : "wand.and.sparkles")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 30, height: 28)
+            }
+            .buttonStyle(.borderedProminent)
+            .help(reorganizer.isReorganizing ? "Tidying library" : "Tidy library")
+            .disabled(reorganizer.isReorganizing || store.thoughts.isEmpty)
+        }
     }
 
     private var modeControl: some View {
-        HStack(spacing: 4) {
+        Picker("Mode", selection: $mode) {
             ForEach(Mode.allCases) { item in
-                Button {
-                    withAnimation(.smooth(duration: 0.18)) {
-                        mode = item
-                    }
-                } label: {
-                    Text(item.rawValue)
-                        .font(.callout.weight(item == mode ? .semibold : .medium))
-                        .foregroundStyle(item == mode ? .primary : .secondary)
-                        .frame(minWidth: 76)
-                        .padding(.horizontal, 10)
-                        .frame(height: 28)
-                        .background {
-                            if item == mode {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(.primary.opacity(0.10))
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-                .help(item.rawValue)
+                Text(item.rawValue)
+                    .tag(item)
             }
         }
-        .padding(4)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
-    }
-
-    private var searchControl: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            TextField("Search thoughts", text: $searchText)
-                .textFieldStyle(.plain)
-
-            if !searchText.isEmpty {
-                Button {
-                    searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-                .help("Clear search")
-            }
-        }
-        .padding(.horizontal, 11)
-        .frame(width: 300, height: 36)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+        .pickerStyle(.segmented)
+        .controlSize(.small)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var pageViewToolbar: some View {
-        HStack(spacing: 4) {
+        Picker("Page View", selection: $pageViewMode) {
             ForEach(PageViewMode.allCases) { item in
-                Button {
-                    withAnimation(.smooth(duration: 0.18)) {
-                        pageViewMode = item
-                    }
-                } label: {
-                    Image(systemName: item.iconName)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(item == pageViewMode ? .primary : .secondary)
-                        .frame(width: 30, height: 28)
-                        .background {
-                            if item == pageViewMode {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(.primary.opacity(0.10))
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-                .help(item.rawValue)
+                Label(item.rawValue, systemImage: item.iconName)
+                    .tag(item)
             }
         }
-        .padding(4)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+        .pickerStyle(.segmented)
+        .labelStyle(.iconOnly)
+        .controlSize(.small)
+        .fixedSize(horizontal: true, vertical: false)
         .help(pageViewMode.rawValue)
     }
 
@@ -280,9 +215,7 @@ struct LibraryWindow: View {
         } label: {
             Label(rawSelectionMode ? "Done" : "Select", systemImage: rawSelectionMode ? "checkmark" : "checklist")
         }
-        .buttonStyle(.glass)
-        .glassEffectID("raw-select", in: toolbarGlassNamespace)
-        .glassEffectTransition(.matchedGeometry)
+        .buttonStyle(.bordered)
 
         if rawSelectionMode {
             Button {
@@ -290,10 +223,8 @@ struct LibraryWindow: View {
             } label: {
                 Label("All", systemImage: "checkmark.circle")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
             .disabled(filteredThoughts.isEmpty)
-            .glassEffectID("raw-select-all", in: toolbarGlassNamespace)
-            .glassEffectTransition(.matchedGeometry)
             .transition(.opacity.combined(with: .scale(scale: 0.96)))
 
             Button {
@@ -301,10 +232,8 @@ struct LibraryWindow: View {
             } label: {
                 Label("Clear", systemImage: "circle")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
             .disabled(selectedThoughtIDs.isEmpty)
-            .glassEffectID("raw-clear", in: toolbarGlassNamespace)
-            .glassEffectTransition(.matchedGeometry)
             .transition(.opacity.combined(with: .scale(scale: 0.96)))
 
             Button(role: .destructive) {
@@ -312,11 +241,9 @@ struct LibraryWindow: View {
             } label: {
                 Label("Delete", systemImage: "trash")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
             .disabled(selectedThoughtIDs.isEmpty)
             .help(selectedThoughtIDs.isEmpty ? "Select thoughts to delete" : "Delete \(selectedThoughtIDs.count) selected thoughts")
-            .glassEffectID("raw-delete", in: toolbarGlassNamespace)
-            .glassEffectTransition(.matchedGeometry)
             .transition(.opacity.combined(with: .scale(scale: 0.96)))
         }
     }
@@ -348,6 +275,7 @@ struct LibraryWindow: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .background(LibraryPalette.windowBackground)
     }
 
     @ViewBuilder
@@ -362,10 +290,16 @@ struct LibraryWindow: View {
             ContentUnavailableView.search(text: searchText)
         } else {
             VStack(spacing: 0) {
-                HStack {
+                HStack(spacing: 12) {
+                    Image(systemName: "text.bubble")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .glassEffect(.regular.tint(LibraryPalette.glassTint), in: .circle)
+
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Raw Thoughts")
-                            .font(.title2.weight(.semibold))
+                            .font(.headline)
 
                         Text(rawSelectionMode ? "\(selectedThoughtIDs.count) selected" : "\(filteredThoughts.count) visible")
                             .font(.caption)
@@ -375,9 +309,12 @@ struct LibraryWindow: View {
                     Spacer()
                 }
                 .padding(.horizontal, 18)
-                .padding(.vertical, 14)
+                .padding(.vertical, 10)
+                .background(LibraryPalette.detailBackground)
 
-                Divider()
+                Rectangle()
+                    .fill(LibraryPalette.separator)
+                    .frame(height: 1)
 
                 List(filteredThoughts) { thought in
                     RawThoughtRow(
@@ -395,7 +332,10 @@ struct LibraryWindow: View {
                     .padding(.vertical, 4)
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .background(LibraryPalette.detailBackground)
             }
+            .background(LibraryPalette.detailBackground)
         }
     }
 
@@ -514,13 +454,15 @@ private struct RawManagementSidebar: View {
 
             if selectionMode {
                 Section {
-                    Text("Use the top toolbar to select all, clear, or delete selected thoughts.")
+                    Text("Use the title bar controls to select all, clear, or delete selected thoughts.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
         }
         .navigationTitle("Thoughts")
+        .scrollContentBackground(.hidden)
+        .background(LibraryPalette.sidebarBackground)
     }
 }
 
@@ -657,6 +599,8 @@ private struct PageSidebar: View {
             }
         }
         .navigationTitle("Pages")
+        .scrollContentBackground(.hidden)
+        .background(LibraryPalette.sidebarBackground)
     }
 }
 
@@ -675,10 +619,14 @@ private struct PageDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .center, spacing: 10) {
+                    Circle()
+                        .fill(Color.thoughtCategoryColor(hex: page.colorHex))
+                        .frame(width: 10, height: 10)
+
                     TextField("Page title", text: $editedTitle, onCommit: commitTitle)
-                        .font(.system(size: 28, weight: .bold))
+                        .font(.system(size: 24, weight: .semibold))
                         .textFieldStyle(.plain)
 
                     if page.isStale {
@@ -690,28 +638,28 @@ private struct PageDetailView: View {
                             .glassEffect(.regular.tint(.orange.opacity(0.14)), in: .rect(cornerRadius: 13))
                     }
 
-                    Circle()
-                        .fill(Color.thoughtCategoryColor(hex: page.colorHex))
-                        .frame(width: 12, height: 12)
-                }
+                    Spacer(minLength: 12)
 
-                GlassEffectContainer(spacing: 10) {
-                    HStack(spacing: 8) {
+                    GlassEffectContainer(spacing: 8) {
                         MovePageMenu(page: page, pages: pages, store: store)
                             .buttonStyle(.glass)
+                            .labelStyle(.iconOnly)
                             .glassEffectID("move-page", in: pageGlassNamespace)
+                            .help("Move page")
 
                         Button(role: .destructive, action: onDelete) {
                             Label("Delete", systemImage: "trash")
+                                .labelStyle(.iconOnly)
                         }
                         .buttonStyle(.glass)
                         .glassEffectID("delete-page", in: pageGlassNamespace)
+                        .help("Delete page")
                     }
                 }
 
                 if !page.summary.isEmpty {
                     Text(page.summary)
-                        .font(.title3)
+                        .font(.body)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
@@ -754,9 +702,12 @@ private struct PageDetailView: View {
                     distilledView
                 }
             }
-            .padding(28)
+            .padding(.horizontal, 30)
+            .padding(.vertical, 24)
             .frame(maxWidth: 760, alignment: .leading)
         }
+        .scrollContentBackground(.hidden)
+        .background(LibraryPalette.detailBackground)
         .onAppear {
             editedTitle = page.title
         }
@@ -844,6 +795,14 @@ private struct PageDetailView: View {
         store.renamePage(page.id, title: editedTitle)
         ThoughtProcessor.shared.synthesizeStalePages()
     }
+}
+
+private enum LibraryPalette {
+    static let windowBackground = Color(red: 0.070, green: 0.067, blue: 0.060)
+    static let sidebarBackground = Color(red: 0.100, green: 0.096, blue: 0.086)
+    static let detailBackground = Color(red: 0.082, green: 0.078, blue: 0.070)
+    static let separator = Color.white.opacity(0.085)
+    static let glassTint = Color.white.opacity(0.08)
 }
 
 private extension Color {
