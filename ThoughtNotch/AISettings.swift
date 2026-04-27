@@ -5,14 +5,34 @@ import Foundation
 final class AISettings: ObservableObject {
     static let shared = AISettings()
 
+    enum APIEndpoint: String, CaseIterable, Identifiable {
+        case responses
+        case chatCompletions
+
+        var id: String {
+            rawValue
+        }
+
+        var displayName: String {
+            switch self {
+            case .responses:
+                "Responses API"
+            case .chatCompletions:
+                "Chat Completions"
+            }
+        }
+    }
+
     private enum Keys {
         static let isEnabled = "ai.isEnabled"
         static let apiBaseURL = "ai.apiBaseURL"
+        static let apiEndpoint = "ai.apiEndpoint"
         static let modelID = "ai.modelID"
         static let apiKey = "openai.apiKey"
     }
 
     static let defaultAPIBaseURL = "https://api.openai.com/v1"
+    static let defaultAPIEndpoint = APIEndpoint.responses
     static let defaultModelID = "gpt-5.4-mini"
 
     @Published var isEnabled: Bool {
@@ -24,6 +44,12 @@ final class AISettings: ObservableObject {
     @Published var apiBaseURL: String {
         didSet {
             UserDefaults.standard.set(apiBaseURL, forKey: Keys.apiBaseURL)
+        }
+    }
+
+    @Published var apiEndpoint: APIEndpoint {
+        didSet {
+            UserDefaults.standard.set(apiEndpoint.rawValue, forKey: Keys.apiEndpoint)
         }
     }
 
@@ -73,6 +99,8 @@ final class AISettings: ObservableObject {
     private init() {
         isEnabled = UserDefaults.standard.bool(forKey: Keys.isEnabled)
         apiBaseURL = UserDefaults.standard.string(forKey: Keys.apiBaseURL) ?? Self.defaultAPIBaseURL
+        apiEndpoint = UserDefaults.standard.string(forKey: Keys.apiEndpoint)
+            .flatMap(APIEndpoint.init(rawValue:)) ?? Self.defaultAPIEndpoint
         modelID = UserDefaults.standard.string(forKey: Keys.modelID) ?? Self.defaultModelID
         apiKey = ""
     }

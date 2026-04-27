@@ -38,13 +38,13 @@ enum OpenAIClientError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidBaseURL:
-            "Invalid OpenAI proxy URL."
+            "Invalid AI provider base URL."
         case .invalidResponse:
-            "OpenAI returned an invalid response."
+            "AI provider returned an invalid response."
         case .apiError(let message):
             message
         case .missingOutputText:
-            "OpenAI response did not include structured output text."
+            "AI provider response did not include structured output text."
         }
     }
 }
@@ -60,66 +60,51 @@ struct OpenAIClient {
     }
 
     func process(input: ThoughtProcessingInput) async throws -> ThoughtProcessingOutput {
-        let payload = try makePayload(input: input)
-        var request = authenticatedRequest(url: try endpointURL(path: "responses"))
-        request.httpMethod = "POST"
-        request.timeoutInterval = 60
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw OpenAIClientError.invalidResponse
-        }
-
-        guard 200..<300 ~= httpResponse.statusCode else {
-            throw OpenAIClientError.apiError(apiErrorMessage(from: data) ?? "OpenAI request failed with status \(httpResponse.statusCode).")
-        }
-
-        let outputText = try outputText(from: data)
+        let outputText = try await requestOutputText(
+            systemPrompt: """
+            You organize a private thought-capture notebook. Keep raw meaning intact, route thoughts into a hierarchical page tree, and only create action items for explicit or strongly implied actions. Return JSON that exactly matches the schema.
+            """,
+            userPrompt: input.prompt,
+            schemaName: "thought_distillation",
+            schema: Self.processingSchema,
+            exampleJSON: Self.processingExampleJSON,
+            timeout: 120,
+            maxTokens: 4096,
+            failureMessage: "AI request failed"
+        )
         return try JSONDecoder().decode(ThoughtProcessingOutput.self, from: Data(outputText.utf8))
     }
 
     func reorganize(input: ThoughtReorganizationInput) async throws -> ReorganizationProposal {
-        let payload = try makeReorganizationPayload(input: input)
-        var request = authenticatedRequest(url: try endpointURL(path: "responses"))
-        request.httpMethod = "POST"
-        request.timeoutInterval = 90
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw OpenAIClientError.invalidResponse
-        }
-
-        guard 200..<300 ~= httpResponse.statusCode else {
-            throw OpenAIClientError.apiError(apiErrorMessage(from: data) ?? "OpenAI reorganization request failed with status \(httpResponse.statusCode).")
-        }
-
-        let outputText = try outputText(from: data)
+        let outputText = try await requestOutputText(
+            systemPrompt: """
+            You reorganize a private thought notebook. Preserve every raw thought ID, propose a clear hierarchical page tree, and produce concise Notion-style page summaries and body markdown. Return JSON that exactly matches the schema.
+            """,
+            userPrompt: input.prompt,
+            schemaName: "thought_reorganization",
+            schema: Self.reorganizationSchema,
+            exampleJSON: Self.reorganizationExampleJSON,
+            timeout: 90,
+            maxTokens: 12000,
+            failureMessage: "AI reorganization request failed"
+        )
         let output = try JSONDecoder().decode(ReorganizationClientOutput.self, from: Data(outputText.utf8))
         return output.proposal
     }
 
     func synthesizePage(input: ThoughtSynthesisInput) async throws -> ThoughtSynthesisOutput {
-        let payload = try makeSynthesisPayload(input: input)
-        var request = authenticatedRequest(url: try endpointURL(path: "responses"))
-        request.httpMethod = "POST"
-        request.timeoutInterval = 90
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw OpenAIClientError.invalidResponse
-        }
-
-        guard 200..<300 ~= httpResponse.statusCode else {
-            throw OpenAIClientError.apiError(apiErrorMessage(from: data) ?? "OpenAI synthesis request failed with status \(httpResponse.statusCode).")
-        }
-
-        let outputText = try outputText(from: data)
+        let outputText = try await requestOutputText(
+            systemPrompt: """
+            You synthesize a private notebook page. Write concise, valid markdown with clear block structure and blank lines between headings, paragraphs, and lists. Surface patterns, tensions, open loops, decisions, and emerging structure without becoming wordy. Return JSON that exactly matches the schema.
+            """,
+            userPrompt: input.prompt,
+            schemaName: "thought_page_synthesis",
+            schema: Self.synthesisSchema,
+            exampleJSON: Self.synthesisExampleJSON,
+            timeout: 90,
+            maxTokens: 2048,
+            failureMessage: "AI synthesis request failed"
+        )
         return try JSONDecoder().decode(ThoughtSynthesisOutput.self, from: Data(outputText.utf8))
     }
 
@@ -153,6 +138,81 @@ struct OpenAIClient {
             }
     }
 
+    private func requestOutputText(
+        systemPrompt: String,
+        userPrompt: String,
+        schemaName: String,
+        schema: [String: Any],
+        exampleJSON: String,
+        timeout: TimeInterval,
+        maxTokens: Int,
+        failureMessage: String
+    ) async throws -> String {
+        let endpointPath: String
+        let payload: [String: Any]
+
+        switch settings.apiEndpoint {
+        case .responses:
+            endpointPath = "responses"
+            payload = responsesPayload(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                schemaName: schemaName,
+                schema: schema
+            )
+        case .chatCompletions:
+            endpointPath = "chat/completions"
+            payload = chatCompletionsPayload(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                exampleJSON: exampleJSON,
+                maxTokens: maxTokens
+            )
+        }
+
+        let data = try await executeJSONRequest(
+            endpointPath: endpointPath,
+            payload: payload,
+            timeout: timeout,
+            failureMessage: failureMessage
+        )
+
+        switch settings.apiEndpoint {
+        case .responses:
+            return try responsesOutputText(from: data)
+        case .chatCompletions:
+            return try chatCompletionOutputText(from: data)
+        }
+    }
+
+    private func executeJSONRequest(
+        endpointPath: String,
+        payload: [String: Any],
+        timeout: TimeInterval,
+        failureMessage: String
+    ) async throws -> Data {
+        var request = authenticatedRequest(url: try endpointURL(path: endpointPath))
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OpenAIClientError.invalidResponse
+        }
+
+        guard 200..<300 ~= httpResponse.statusCode else {
+            throw OpenAIClientError.apiError(apiFailureMessage(
+                from: data,
+                statusCode: httpResponse.statusCode,
+                failureMessage: failureMessage
+            ))
+        }
+
+        return data
+    }
+
     private func authenticatedRequest(url: URL) -> URLRequest {
         var request = URLRequest(url: url)
         let apiKey = settings.loadAPIKeyIfNeeded().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -179,85 +239,80 @@ struct OpenAIClient {
         return url
     }
 
-    private func makePayload(input: ThoughtProcessingInput) throws -> [String: Any] {
+    private func responsesPayload(
+        systemPrompt: String,
+        userPrompt: String,
+        schemaName: String,
+        schema: [String: Any]
+    ) -> [String: Any] {
         [
             "model": settings.modelID.trimmingCharacters(in: .whitespacesAndNewlines),
             "input": [
                 [
                     "role": "system",
-                    "content": """
-                    You organize a private thought-capture notebook. Keep raw meaning intact, route thoughts into a hierarchical page tree, and only create action items for explicit or strongly implied actions. Return JSON that exactly matches the schema.
-                    """
+                    "content": systemPrompt
                 ],
                 [
                     "role": "user",
-                    "content": input.prompt
+                    "content": userPrompt
                 ]
             ],
             "text": [
-                "format": [
-                    "type": "json_schema",
-                    "name": "thought_distillation",
-                    "strict": true,
-                    "schema": Self.processingSchema
-                ]
+                "format": jsonSchemaFormat(name: schemaName, schema: schema)
             ]
         ]
     }
 
-    private func makeReorganizationPayload(input: ThoughtReorganizationInput) throws -> [String: Any] {
+    private func chatCompletionsPayload(
+        systemPrompt: String,
+        userPrompt: String,
+        exampleJSON: String,
+        maxTokens: Int
+    ) -> [String: Any] {
         [
             "model": settings.modelID.trimmingCharacters(in: .whitespacesAndNewlines),
-            "input": [
+            "messages": [
                 [
                     "role": "system",
-                    "content": """
-                    You reorganize a private thought notebook. Preserve every raw thought ID, propose a clear hierarchical page tree, and produce concise Notion-style page summaries and body markdown. Return JSON that exactly matches the schema.
-                    """
+                    "content": chatJSONSystemPrompt(systemPrompt: systemPrompt, exampleJSON: exampleJSON)
                 ],
                 [
                     "role": "user",
-                    "content": input.prompt
+                    "content": userPrompt
                 ]
             ],
-            "text": [
-                "format": [
-                    "type": "json_schema",
-                    "name": "thought_reorganization",
-                    "strict": true,
-                    "schema": Self.reorganizationSchema
-                ]
-            ]
+            "response_format": [
+                "type": "json_object"
+            ],
+            "max_tokens": maxTokens
         ]
     }
 
-    private func makeSynthesisPayload(input: ThoughtSynthesisInput) throws -> [String: Any] {
+    private func jsonSchemaFormat(name: String, schema: [String: Any]) -> [String: Any] {
         [
-            "model": settings.modelID.trimmingCharacters(in: .whitespacesAndNewlines),
-            "input": [
-                [
-                    "role": "system",
-                    "content": """
-                    You synthesize a private notebook page. Write concise, valid markdown with clear block structure and blank lines between headings, paragraphs, and lists. Surface patterns, tensions, open loops, decisions, and emerging structure without becoming wordy. Return JSON that exactly matches the schema.
-                    """
-                ],
-                [
-                    "role": "user",
-                    "content": input.prompt
-                ]
-            ],
-            "text": [
-                "format": [
-                    "type": "json_schema",
-                    "name": "thought_page_synthesis",
-                    "strict": true,
-                    "schema": Self.synthesisSchema
-                ]
-            ]
+            "type": "json_schema",
+            "name": name,
+            "strict": true,
+            "schema": schema
         ]
     }
 
-    private func outputText(from data: Data) throws -> String {
+    private func chatJSONSystemPrompt(systemPrompt: String, exampleJSON: String) -> String {
+        """
+        \(systemPrompt)
+
+        JSON OUTPUT REQUIREMENTS:
+        - Return only one valid JSON object.
+        - Do not include markdown fences, prose, comments, or any text outside the JSON object.
+        - Include every key shown in the example JSON output.
+        - Use empty strings or empty arrays when there is no value.
+
+        EXAMPLE JSON OUTPUT:
+        \(exampleJSON)
+        """
+    }
+
+    private func responsesOutputText(from data: Data) throws -> String {
         let envelope = try JSONDecoder().decode(ResponseEnvelope.self, from: data)
         if let outputText = envelope.outputText, !outputText.isEmpty {
             return outputText
@@ -275,8 +330,38 @@ struct OpenAIClient {
         return text
     }
 
+    private func chatCompletionOutputText(from data: Data) throws -> String {
+        let envelope = try JSONDecoder().decode(ChatCompletionEnvelope.self, from: data)
+        let text = envelope.choices
+            .compactMap(\.message.content)
+            .joined()
+
+        guard !text.isEmpty else {
+            throw OpenAIClientError.missingOutputText
+        }
+
+        return text
+    }
+
     private func apiErrorMessage(from data: Data) -> String? {
         try? JSONDecoder().decode(ErrorEnvelope.self, from: data).error.message
+    }
+
+    private func apiFailureMessage(from data: Data, statusCode: Int, failureMessage: String) -> String {
+        if let message = apiErrorMessage(from: data) {
+            return message
+        }
+
+        if statusCode == 404 {
+            switch settings.apiEndpoint {
+            case .responses:
+                return "\(failureMessage) with status 404. This provider may not support the Responses API; try API type \"Chat Completions\"."
+            case .chatCompletions:
+                return "\(failureMessage) with status 404. Check that the base URL includes the provider API prefix, such as /v1."
+            }
+        }
+
+        return "\(failureMessage) with status \(statusCode)."
     }
 
     private struct ResponseEnvelope: Decodable {
@@ -295,6 +380,18 @@ struct OpenAIClient {
 
     private struct Content: Decodable {
         let text: String?
+    }
+
+    private struct ChatCompletionEnvelope: Decodable {
+        struct Choice: Decodable {
+            let message: Message
+        }
+
+        struct Message: Decodable {
+            let content: String?
+        }
+
+        let choices: [Choice]
     }
 
     private struct ErrorEnvelope: Decodable {
@@ -348,6 +445,58 @@ struct OpenAIClient {
             )
         }
     }
+
+    private static let processingExampleJSON = """
+    {
+      "title": "Follow up on launch plan",
+      "distilled": "Follow up with Sam about the launch plan before Friday.",
+      "classification": "both",
+      "tags": ["launch", "follow-up"],
+      "pageId": "",
+      "pageParentId": "",
+      "pageTitle": "Launch Planning",
+      "pageSummary": "Current decisions, open loops, and follow-ups for launch planning.",
+      "pageBodyMarkdown": "## Notes\\n\\nFollow up with Sam about the launch plan before Friday.",
+      "themeTitle": "Launch Planning",
+      "themeSummary": "Current decisions, open loops, and follow-ups for launch planning.",
+      "linkedThoughtIds": [],
+      "dailyDigestTitle": "Launch follow-ups",
+      "dailyDigestSummary": "Captured a follow-up related to the launch plan.",
+      "dailyDigestHighlights": ["Follow up with Sam about the launch plan."],
+      "actionItems": [
+        {
+          "title": "Follow up with Sam",
+          "detail": "Ask Sam about the launch plan.",
+          "dueAt": ""
+        }
+      ]
+    }
+    """
+
+    private static let reorganizationExampleJSON = """
+    {
+      "notes": ["Grouped related launch thoughts under one planning page."],
+      "deletedPageIds": [],
+      "pages": [
+        {
+          "id": "new-launch-planning",
+          "existingPageId": "",
+          "parentId": "",
+          "title": "Launch Planning",
+          "summary": "Decisions, open loops, and follow-ups for launch planning.",
+          "bodyMarkdown": "## Current Shape\\n\\nKey launch notes and next decisions.",
+          "tags": ["launch", "planning"],
+          "thoughtIds": ["00000000-0000-0000-0000-000000000000"]
+        }
+      ]
+    }
+    """
+
+    private static let synthesisExampleJSON = """
+    {
+      "synthesisMarkdown": "## Current Shape\\n\\nThe page is collecting launch planning decisions and follow-ups.\\n\\n## Open Loops\\n\\n- Confirm the next owner and timeline."
+    }
+    """
 
     private static let processingSchema: [String: Any] = [
         "type": "object",

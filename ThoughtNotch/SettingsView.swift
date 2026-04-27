@@ -41,6 +41,13 @@ struct SettingsView: View {
                 TextField("API base URL", text: $settings.apiBaseURL)
                     .textFieldStyle(.roundedBorder)
 
+                Picker("API type", selection: $settings.apiEndpoint) {
+                    ForEach(AISettings.APIEndpoint.allCases) { endpoint in
+                        Text(endpoint.displayName).tag(endpoint)
+                    }
+                }
+                .pickerStyle(.menu)
+
                 SecureField("API key", text: $settings.apiKey)
                     .textFieldStyle(.roundedBorder)
 
@@ -136,11 +143,6 @@ struct SettingsView: View {
 
         guard URL(string: settings.apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) != nil else {
             modelLoadError = "Enter a valid API base URL to load models."
-            return
-        }
-
-        guard !settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            modelLoadError = "Enter an API key to load models."
             return
         }
 
