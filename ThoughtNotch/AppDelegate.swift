@@ -17,9 +17,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var libraryWindowController: NSWindowController?
     private var settingsWindowController: NSWindowController?
     private var shortcutChangeObserver: NSObjectProtocol?
+    private var windowCloseObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(.accessory)
         PageNavigationShortcut.deactivateRegisteredShortcuts()
 
         KeyboardShortcuts.onKeyDown(for: .toggleNotch) { [weak self] in
@@ -68,6 +69,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.notchPanelController.refreshPageShortcuts()
             }
         }
+
+        windowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let closingWindow = notification.object as? NSWindow else {
+                return
+            }
+
+            Task { @MainActor [weak self] in
+                guard self?.isManagedDockWindow(closingWindow) == true else {
+                    return
+                }
+
+                self?.updateDockVisibility(excluding: closingWindow)
+            }
+        }
     }
 
     func toggleNotch() {
@@ -94,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             libraryWindowController = NSWindowController(window: window)
         }
 
+        showDockIcon()
         NSApp.activate(ignoringOtherApps: true)
         libraryWindowController?.showWindow(nil)
         libraryWindowController?.window?.makeKeyAndOrderFront(nil)
@@ -115,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindowController = NSWindowController(window: window)
         }
 
+        showDockIcon()
         NSApp.activate(ignoringOtherApps: true)
         guard let window = settingsWindowController?.window else {
             return
@@ -127,5 +148,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.deminiaturize(nil)
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    private func showDockIcon() {
+        NSApp.setActivationPolicy(.regular)
+    }
+
+    private func updateDockVisibility(excluding closingWindow: NSWindow) {
+        if hasOpenManagedDockWindow(excluding: closingWindow) {
+            showDockIcon()
+        } else {
+            NSApp.setActivationPolicy(.accessory)
+        }
+    }
+
+    private func hasOpenManagedDockWindow(excluding closingWindow: NSWindow) -> Bool {
+        managedDockWindows.contains { window in
+            window !== closingWindow && (window.isVisible || window.isMiniaturized)
+        }
+    }
+
+    private func isManagedDockWindow(_ window: NSWindow) -> Bool {
+        managedDockWindows.contains { $0 === window }
+    }
+
+    private var managedDockWindows: [NSWindow] {
+        [libraryWindowController?.window, settingsWindowController?.window].compactMap { $0 }
     }
 }
