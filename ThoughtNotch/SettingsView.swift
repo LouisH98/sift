@@ -24,9 +24,9 @@ struct SettingsView: View {
             }
 
             Section("Notch") {
-                Toggle("Glow on hover", isOn: $appearanceSettings.isGlowEnabled)
+                Toggle("Notch effects", isOn: $appearanceSettings.isGlowEnabled)
 
-                ColorPicker("Glow color", selection: glowColorBinding, supportsOpacity: false)
+                ColorPicker("Effect color", selection: glowColorBinding, supportsOpacity: false)
                     .disabled(!appearanceSettings.isGlowEnabled)
 
                 HStack {
