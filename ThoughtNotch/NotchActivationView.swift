@@ -43,10 +43,10 @@ final class NotchActivationHoverModel: ObservableObject {
 struct NotchActivationView: View {
     @ObservedObject var model: NotchActivationHoverModel
     @ObservedObject var appearanceSettings: NotchAppearanceSettings
+    @ObservedObject var processor: ThoughtProcessor
 
+    let notchSize: CGSize
     let size: CGSize
-
-    private let notchSize = CGSize(width: 185, height: 32)
 
     private var glowStrength: CGFloat {
         guard appearanceSettings.isGlowEnabled else {
@@ -58,6 +58,14 @@ struct NotchActivationView: View {
         let pressBoost: CGFloat = model.isPressed ? 0.12 : 0
 
         return min(1, hoverFloor + proximityBoost + pressBoost)
+    }
+
+    private var surfaceOpacity: CGFloat {
+        if model.isHovered {
+            return 0.82
+        }
+
+        return processor.notchProcessingState.isDistilling ? 0.16 : 0
     }
 
     var body: some View {
@@ -79,13 +87,24 @@ struct NotchActivationView: View {
 
     private var notchSurface: some View {
         NotchShape(topCornerRadius: 6, bottomCornerRadius: 14)
-            .fill(.black.opacity(model.isHovered ? 0.82 : 0))
+            .fill(.black.opacity(surfaceOpacity))
             .frame(width: notchSize.width, height: notchSize.height)
+            .overlay {
+                NotchProcessingEffect(
+                    state: processor.notchProcessingState,
+                    topCornerRadius: 6,
+                    bottomCornerRadius: 14,
+                    glowColor: appearanceSettings.glowColor,
+                    segmentLengthScale: 1.35
+                )
+                .frame(width: notchSize.width + 10, height: notchSize.height + 6)
+            }
             .shadow(color: appearanceSettings.glowColor.opacity(glowStrength * 0.34), radius: 18 + (glowStrength * 18), x: 0, y: 8)
             .shadow(color: appearanceSettings.glowColor.opacity(glowStrength * 0.22), radius: 34 + (glowStrength * 24), x: 0, y: 18)
             .scaleEffect(model.isPressed ? 0.985 : 1, anchor: .top)
             .animation(.smooth(duration: 0.12), value: model.isHovered)
             .animation(.smooth(duration: 0.08), value: model.isPressed)
+            .animation(.smooth(duration: 0.28), value: processor.notchProcessingState.isDistilling)
     }
 }
 

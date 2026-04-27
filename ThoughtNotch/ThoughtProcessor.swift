@@ -13,12 +13,32 @@ struct ThoughtSynthesisInput {
     let prompt: String
 }
 
+struct NotchProcessingState: Equatable {
+    var distillingCount: Int
+    var synthesisCount: Int
+    var hasPendingSynthesis: Bool
+    var completionPulse: Int
+
+    var isQueued: Bool {
+        distillingCount > 0 || synthesisCount > 0 || hasPendingSynthesis
+    }
+
+    var isDistilling: Bool {
+        distillingCount > 0
+    }
+
+    var isSynthesizing: Bool {
+        !isDistilling && (synthesisCount > 0 || hasPendingSynthesis)
+    }
+}
+
 @MainActor
 final class ThoughtProcessor: ObservableObject {
     static let shared = ThoughtProcessor()
 
     @Published private(set) var isBackfilling = false
     @Published private(set) var lastError: String?
+    @Published private(set) var completionPulse = 0
     @Published private var queuedThoughtIDs: Set<UUID> = []
     @Published private var queuedPageSynthesisIDs: Set<UUID> = []
     @Published private var pendingSynthesisRefresh = false
@@ -30,6 +50,23 @@ final class ThoughtProcessor: ObservableObject {
 
     var isProcessing: Bool {
         isBackfilling || !queuedThoughtIDs.isEmpty || !queuedPageSynthesisIDs.isEmpty || pendingSynthesisRefresh
+    }
+
+    var notchProcessingState: NotchProcessingState {
+        NotchProcessingState(
+            distillingCount: distillingCount,
+            synthesisCount: queuedPageSynthesisIDs.count,
+            hasPendingSynthesis: pendingSynthesisRefresh,
+            completionPulse: completionPulse
+        )
+    }
+
+    private var distillingCount: Int {
+        if isBackfilling {
+            return max(1, store.unprocessedThoughtCount)
+        }
+
+        return queuedThoughtIDs.count
     }
 
     private var isDistilling: Bool {
@@ -53,8 +90,11 @@ final class ThoughtProcessor: ObservableObject {
         queuedThoughtIDs.insert(thought.id)
 
         Task { @MainActor in
-            await process(thoughtID: thought.id)
+            let didComplete = await process(thoughtID: thought.id)
             queuedThoughtIDs.remove(thought.id)
+            if didComplete {
+                completionPulse += 1
+            }
             await synthesizeDeferredPagesIfIdle()
         }
     }
@@ -68,7 +108,10 @@ final class ThoughtProcessor: ObservableObject {
 
         Task { @MainActor in
             for thought in store.unprocessedThoughts() {
-                await process(thoughtID: thought.id)
+                let didComplete = await process(thoughtID: thought.id)
+                if didComplete {
+                    completionPulse += 1
+                }
             }
 
             isBackfilling = false
@@ -76,9 +119,9 @@ final class ThoughtProcessor: ObservableObject {
         }
     }
 
-    private func process(thoughtID: UUID) async {
+    private func process(thoughtID: UUID) async -> Bool {
         guard let thought = store.thought(with: thoughtID), thought.processedAt == nil else {
-            return
+            return false
         }
 
         do {
@@ -89,10 +132,12 @@ final class ThoughtProcessor: ObservableObject {
                 await requestPageSynthesisAndAncestors(pageID: changedPageID)
             }
             lastError = nil
+            return true
         } catch {
             let message = error.localizedDescription
             lastError = message
             store.markProcessingFailed(thoughtID: thoughtID, error: message)
+            return false
         }
     }
 

@@ -40,13 +40,14 @@ private extension Int {
 struct NotchView: View {
     @ObservedObject var model: NotchAnimationModel
     @ObservedObject var store: ThoughtStore
+    @ObservedObject var processor: ThoughtProcessor
     @ObservedObject var actionNavigationModel: ActionListNavigationModel
+    @ObservedObject private var appearanceSettings = NotchAppearanceSettings.shared
 
     let onSave: (String) -> Void
     let onCancel: () -> Void
     let onPageDelta: (Int) -> Void
 
-    private let closedSize = CGSize(width: 185, height: 32)
     private let openSize = CGSize(width: 540, height: 184)
     private let topBlurBleed: CGFloat = 32
     private let visibleStageHeight: CGFloat = 240
@@ -73,7 +74,7 @@ struct NotchView: View {
             return CGSize(width: 96, height: 4)
         }
 
-        return model.isOpen ? openSize : closedSize
+        return model.isOpen ? openSize : model.closedNotchSize
     }
 
     private var topCornerRadius: CGFloat {
@@ -109,6 +110,18 @@ struct NotchView: View {
                                 bottomCornerRadius: bottomCornerRadius
                             )
                         )
+                        .overlay {
+                            if appearanceSettings.isGlowEnabled {
+                                NotchProcessingEffect(
+                                    state: processor.notchProcessingState,
+                                    topCornerRadius: topCornerRadius,
+                                    bottomCornerRadius: bottomCornerRadius,
+                                    glowColor: appearanceSettings.glowColor,
+                                    motionDurationScale: model.isOpen ? 1.85 : 1
+                                )
+                                .allowsHitTesting(false)
+                            }
+                        }
                         .overlay(alignment: .top) {
                             Rectangle()
                                 .fill(.black)
@@ -181,7 +194,7 @@ struct NotchView: View {
             } else {
                 Rectangle()
                     .fill(.clear)
-                    .frame(width: closedSize.width - 20, height: model.hideClosedNotch ? 0 : closedSize.height)
+                    .frame(width: model.closedNotchSize.width - 20, height: model.hideClosedNotch ? 0 : model.closedNotchSize.height)
                     .transition(.opacity.animation(.smooth(duration: 0.12)))
             }
         }
@@ -275,6 +288,7 @@ struct NotchShape: Shape {
     NotchView(
         model: NotchAnimationModel(),
         store: .shared,
+        processor: .shared,
         actionNavigationModel: ActionListNavigationModel(),
         onSave: { _ in },
         onCancel: {},

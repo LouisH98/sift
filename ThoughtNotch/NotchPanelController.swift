@@ -33,8 +33,7 @@ final class NotchPanelController {
     private let visibleWindowSize = NSSize(width: 640, height: 240)
     private let activationHitSize = NSSize(width: 380, height: 78)
     private let activationPanelSize = NSSize(width: 980, height: 220)
-    private let notchActivationSize = NSSize(width: 185, height: 32)
-    private let topEdgePushSize = NSSize(width: 185, height: 10)
+    private let fallbackClosedNotchSize = NSSize(width: 185, height: 32)
     private let topEdgePushThreshold: CGFloat = 34
 
     init(store: ThoughtStore) {
@@ -97,9 +96,15 @@ final class NotchPanelController {
 
         let screen = sourceScreen ?? activeScreen()
         let finalFrame = frame(on: screen)
+        let closedNotchSize = closedNotchSize(on: screen)
 
         if !wasVisible {
-            animationModel.prepareForPresentation(hideClosedNotch: shouldHideClosedNotch(on: screen))
+            animationModel.prepareForPresentation(
+                hideClosedNotch: shouldHideClosedNotch(on: screen),
+                closedNotchSize: closedNotchSize
+            )
+        } else {
+            animationModel.updateClosedNotchSize(closedNotchSize)
         }
 
         panel.setFrame(finalFrame, display: true)
@@ -182,6 +187,7 @@ final class NotchPanelController {
             rootView: NotchView(
                 model: animationModel,
                 store: store,
+                processor: .shared,
                 actionNavigationModel: actionNavigationModel,
                 onSave: { [weak self] text in
                     Task { @MainActor in
@@ -382,6 +388,8 @@ final class NotchPanelController {
             rootView: NotchActivationView(
                 model: hoverModel,
                 appearanceSettings: appearanceSettings,
+                processor: .shared,
+                notchSize: closedNotchSize(on: screen),
                 size: activationPanelSize
             )
         )
@@ -653,7 +661,7 @@ final class NotchPanelController {
     }
 
     private func activationClickSize(on screen: NSScreen) -> NSSize {
-        shouldHideClosedNotch(on: screen) ? topEdgePushSize : notchActivationSize
+        shouldHideClosedNotch(on: screen) ? topEdgePushSize(on: screen) : closedNotchSize(on: screen)
     }
 
     private func activationClickFrame(on screen: NSScreen) -> NSRect {
@@ -666,12 +674,32 @@ final class NotchPanelController {
 
     private func topEdgePushScreen(at mouseLocation: NSPoint) -> NSScreen? {
         NSScreen.screens.first { screen in
-            let x = screen.frame.midX - (topEdgePushSize.width / 2)
-            let topCenterXRange = x...(x + topEdgePushSize.width)
+            let size = topEdgePushSize(on: screen)
+            let x = screen.frame.midX - (size.width / 2)
+            let topCenterXRange = x...(x + size.width)
 
             return topCenterXRange.contains(mouseLocation.x)
-                && mouseLocation.y >= screen.frame.maxY - topEdgePushSize.height
+                && mouseLocation.y >= screen.frame.maxY - size.height
         }
+    }
+
+    private func closedNotchSize(on screen: NSScreen) -> NSSize {
+        var size = fallbackClosedNotchSize
+
+        if let topLeftWidth = screen.auxiliaryTopLeftArea?.width,
+           let topRightWidth = screen.auxiliaryTopRightArea?.width {
+            size.width = screen.frame.width - topLeftWidth - topRightWidth + 4
+        }
+
+        if screen.safeAreaInsets.top > 0 {
+            size.height = screen.safeAreaInsets.top
+        }
+
+        return size
+    }
+
+    private func topEdgePushSize(on screen: NSScreen) -> NSSize {
+        NSSize(width: closedNotchSize(on: screen).width, height: 10)
     }
 
     private func shouldHideClosedNotch(on screen: NSScreen) -> Bool {
@@ -718,17 +746,23 @@ final class NotchAnimationModel: ObservableObject {
     @Published var captureDraft = ""
     @Published var selectedPage: NotchPage = .capture
     @Published private(set) var hideClosedNotch = true
+    @Published private(set) var closedNotchSize = CGSize(width: 185, height: 32)
     private var pendingContentUnmount: DispatchWorkItem?
 
-    func prepareForPresentation(hideClosedNotch: Bool) {
+    func prepareForPresentation(hideClosedNotch: Bool, closedNotchSize: CGSize) {
         pendingContentUnmount?.cancel()
         pendingContentUnmount = nil
         self.hideClosedNotch = hideClosedNotch
+        self.closedNotchSize = closedNotchSize
         isOpen = false
         isBlurred = true
         isContentMounted = false
         isContentPresented = false
         selectedPage = .capture
+    }
+
+    func updateClosedNotchSize(_ closedNotchSize: CGSize) {
+        self.closedNotchSize = closedNotchSize
     }
 
     func open() {
