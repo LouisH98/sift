@@ -10,13 +10,15 @@ final class NotchActivationHoverModel: ObservableObject {
     @Published var isHovered = false
     @Published var isPressed = false
     @Published var proximity: CGFloat = 0
+    @Published var activationProgress: CGFloat = 0
 
     var glowStrengthForTransition: CGFloat {
         let proximity = Self.smoothProximity(proximity)
         let proximityBoost = pow(proximity, 1.18)
-        let pressBoost: CGFloat = isPressed ? 0.12 : 0
+        let progressBoost = pow(Self.smoothProximity(activationProgress), 0.82) * 0.58
+        let pressBoost: CGFloat = isPressed ? 0.08 : 0
 
-        return min(1, proximityBoost + pressBoost)
+        return min(1, max(proximityBoost, progressBoost) + pressBoost)
     }
 
     func updateHover(location: CGPoint, in size: CGSize) {
@@ -41,12 +43,14 @@ final class NotchActivationHoverModel: ObservableObject {
             isHovered = false
             isPressed = false
             proximity = 0
+            activationProgress = 0
         }
     }
 
-    func setPressed(_ isPressed: Bool) {
-        withAnimation(.smooth(duration: 0.08)) {
-            self.isPressed = isPressed
+    func updateActivationProgress(_ progress: CGFloat) {
+        withAnimation(.smooth(duration: 0.14)) {
+            activationProgress = max(0, min(1, progress))
+            isPressed = activationProgress > 0.01
         }
     }
 
@@ -66,7 +70,7 @@ struct NotchActivationView: View {
     let size: CGSize
     let usesTopEdgeLine: Bool
 
-    private let topEdgeLineHeight: CGFloat = 5
+    private let topEdgeLineHeight: CGFloat = 3
 
     private var glowStrength: CGFloat {
         guard appearanceSettings.isGlowEnabled else {
@@ -87,6 +91,17 @@ struct NotchActivationView: View {
         usesTopEdgeLine ? CGSize(width: notchSize.width, height: topEdgeLineHeight) : notchSize
     }
 
+    private var feedbackProgress: CGFloat {
+        NotchActivationHoverModel.smoothProximity(model.activationProgress)
+    }
+
+    private var feedbackSize: CGSize {
+        CGSize(
+            width: activationSize.width + (feedbackProgress * (usesTopEdgeLine ? 82 : 22)),
+            height: activationSize.height + (feedbackProgress * (usesTopEdgeLine ? 18 : 9))
+        )
+    }
+
     private var glowShape: NotchGlowShape {
         usesTopEdgeLine ? .topEdgeLine : .notch
     }
@@ -94,9 +109,11 @@ struct NotchActivationView: View {
     var body: some View {
         ZStack(alignment: .top) {
             if appearanceSettings.isGlowEnabled {
-                NotchGlowField(strength: glowStrength, notchSize: activationSize, shape: glowShape)
+                NotchGlowField(strength: glowStrength, notchSize: feedbackSize, shape: glowShape)
                     .opacity(glowStrength > 0.01 ? 1 : 0)
                     .animation(.smooth(duration: 0.16), value: glowStrength)
+                    .animation(.smooth(duration: 0.14), value: feedbackSize.width)
+                    .animation(.smooth(duration: 0.14), value: feedbackSize.height)
                     .allowsHitTesting(false)
 
                 notchSurface
@@ -113,16 +130,16 @@ struct NotchActivationView: View {
         if usesTopEdgeLine {
             Capsule()
                 .fill(.clear)
-                .frame(width: activationSize.width, height: activationSize.height)
+                .frame(width: feedbackSize.width, height: feedbackSize.height)
                 .overlay {
                     TopEdgeLineProcessingEffect(
                         state: processor.notchProcessingState,
                         glowColor: appearanceSettings.glowColor
                     )
                 }
-                .scaleEffect(x: model.isPressed ? 0.985 : 1, y: 1, anchor: .top)
                 .animation(.smooth(duration: 0.12), value: model.isHovered)
                 .animation(.smooth(duration: 0.08), value: model.isPressed)
+                .animation(.smooth(duration: 0.14), value: model.activationProgress)
                 .animation(.smooth(duration: 0.28), value: processor.notchProcessingState.isDistilling)
         } else {
             NotchShape(topCornerRadius: 6, bottomCornerRadius: 14)
@@ -140,9 +157,14 @@ struct NotchActivationView: View {
                 }
                 .shadow(color: appearanceSettings.glowColor.opacity(glowStrength * 0.34), radius: 18 + (glowStrength * 18), x: 0, y: 8)
                 .shadow(color: appearanceSettings.glowColor.opacity(glowStrength * 0.22), radius: 34 + (glowStrength * 24), x: 0, y: 18)
-                .scaleEffect(model.isPressed ? 0.985 : 1, anchor: .top)
+                .scaleEffect(
+                    x: 1 + (feedbackProgress * 0.05),
+                    y: 1 + (feedbackProgress * 0.12),
+                    anchor: .top
+                )
                 .animation(.smooth(duration: 0.12), value: model.isHovered)
                 .animation(.smooth(duration: 0.08), value: model.isPressed)
+                .animation(.smooth(duration: 0.14), value: model.activationProgress)
                 .animation(.smooth(duration: 0.28), value: processor.notchProcessingState.isDistilling)
         }
     }
@@ -153,16 +175,23 @@ private struct TopEdgeLineProcessingEffect: View {
     let glowColor: Color
 
     @State private var pulseStartedAt: TimeInterval?
+    @State private var queuedFadeStartedAt: TimeInterval?
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 60)) { timeline in
             let seconds = timeline.date.timeIntervalSinceReferenceDate
             let completion = completionProgress(seconds: seconds)
-            let isVisible = state.isDistilling || completion < 1
+            let queuedFade = queuedFadeProgress(seconds: seconds)
+            let queuedOpacity = state.isQueued ? 1 : max(0, 1 - queuedFade)
+            let isVisible = state.isQueued || queuedOpacity > 0 || completion < 1
 
             ZStack {
+                if state.isQueued || queuedOpacity > 0 {
+                    pendingBreath(seconds: seconds, opacity: queuedOpacity)
+                }
+
                 if state.isDistilling {
-                    movingSegment(seconds: seconds)
+                    activeGlint(seconds: seconds)
                 }
 
                 completionPulse(progress: completion)
@@ -180,15 +209,72 @@ private struct TopEdgeLineProcessingEffect: View {
 
             pulseStartedAt = Date().timeIntervalSinceReferenceDate
         }
+        .onChange(of: state.isQueued) { _, isQueued in
+            queuedFadeStartedAt = isQueued ? nil : Date().timeIntervalSinceReferenceDate
+        }
     }
 
-    private func movingSegment(seconds: TimeInterval) -> some View {
+    private func pendingBreath(seconds: TimeInterval, opacity: CGFloat) -> some View {
         GeometryReader { geometry in
             let width = geometry.size.width
-            let segmentWidth = max(42, width * 0.24)
-            let travelWidth = width + segmentWidth
-            let phase = CGFloat(seconds.truncatingRemainder(dividingBy: 1.9) / 1.9)
-            let x = (phase * travelWidth) - segmentWidth
+            let height = geometry.size.height
+            let breath = 0.5 + (0.5 * sin(seconds * .pi * 2 / 1.8))
+            let coreWidth = min(width * 0.48, 170)
+            let washWidth = min(width * 0.7, 260)
+
+            ZStack {
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                .clear,
+                                glowColor.opacity(0.12 + (breath * 0.08)),
+                                .white.opacity(0.1 + (breath * 0.08)),
+                                glowColor.opacity(0.12 + (breath * 0.08)),
+                                .clear
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: washWidth, height: max(1.1, height * 0.32))
+                    .blur(radius: 2.8)
+
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                .clear,
+                                glowColor.opacity(0.2 + (breath * 0.1)),
+                                .white.opacity(0.18 + (breath * 0.12)),
+                                glowColor.opacity(0.2 + (breath * 0.1)),
+                                .clear
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: coreWidth, height: max(0.8, height * 0.16))
+                    .shadow(color: glowColor.opacity(0.28 + (breath * 0.14)), radius: 5.5, x: 0, y: 2)
+            }
+            .frame(width: width, height: height)
+            .blendMode(.plusLighter)
+            .opacity(opacity)
+        }
+        .clipped()
+    }
+
+    private func activeGlint(seconds: TimeInterval) -> some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let height = geometry.size.height
+            let trackWidth = min(width * 0.68, 250)
+            let range = topEdgeBounceRange(
+                phase: CGFloat(seconds.truncatingRemainder(dividingBy: 1.95) / 1.95),
+                segmentLength: 0.24
+            )
+            let segmentWidth = max(22, (range.end - range.start) * trackWidth)
+            let x = ((width - trackWidth) / 2) + (range.start * trackWidth)
 
             Capsule()
                 .fill(
@@ -203,12 +289,58 @@ private struct TopEdgeLineProcessingEffect: View {
                         endPoint: .trailing
                     )
                 )
-                .frame(width: segmentWidth, height: geometry.size.height)
+                .frame(width: segmentWidth, height: max(0.9, height * 0.2))
                 .offset(x: x)
-                .blur(radius: 0.4)
+                .shadow(color: glowColor.opacity(0.72), radius: 4.5, x: 0, y: 2)
+                .shadow(color: glowColor.opacity(0.32), radius: 10, x: 0, y: 4)
                 .blendMode(.plusLighter)
         }
         .clipped()
+    }
+
+    private func topEdgeBounceRange(phase: CGFloat, segmentLength: CGFloat) -> (start: CGFloat, end: CGFloat) {
+        let position = max(0, min(1, phase))
+        let compressedLength = segmentLength * 0.56
+        let travelDuration: CGFloat = 0.38
+        let squeezeDuration: CGFloat = 0.06
+        let recoverDuration: CGFloat = 0.06
+
+        switch position {
+        case 0..<travelDuration:
+            let progress = position / travelDuration
+            let start = progress * (1 - segmentLength)
+            return (start, start + segmentLength)
+        case travelDuration..<(travelDuration + squeezeDuration):
+            let progress = eased((position - travelDuration) / squeezeDuration)
+            let start = interpolate(from: 1 - segmentLength, to: 1 - compressedLength, progress: progress)
+            return (start, 1)
+        case (travelDuration + squeezeDuration)..<(travelDuration + squeezeDuration + recoverDuration):
+            let progress = eased((position - travelDuration - squeezeDuration) / recoverDuration)
+            let start = interpolate(from: 1 - compressedLength, to: 1 - segmentLength, progress: progress)
+            return (start, 1)
+        case 0.5..<(0.5 + travelDuration):
+            let progress = (position - 0.5) / travelDuration
+            let end = interpolate(from: 1, to: segmentLength, progress: progress)
+            return (end - segmentLength, end)
+        case (0.5 + travelDuration)..<(0.5 + travelDuration + squeezeDuration):
+            let progress = eased((position - 0.5 - travelDuration) / squeezeDuration)
+            let end = interpolate(from: segmentLength, to: compressedLength, progress: progress)
+            return (0, end)
+        default:
+            let progress = eased((position - 0.5 - travelDuration - squeezeDuration) / recoverDuration)
+            let end = interpolate(from: compressedLength, to: segmentLength, progress: progress)
+            return (0, end)
+        }
+    }
+
+    private func interpolate(from start: CGFloat, to end: CGFloat, progress: CGFloat) -> CGFloat {
+        start + ((end - start) * progress)
+    }
+
+    private func eased(_ progress: CGFloat) -> CGFloat {
+        let clampedProgress = max(0, min(1, progress))
+
+        return clampedProgress * clampedProgress * (3 - (2 * clampedProgress))
     }
 
     private func completionPulse(progress: CGFloat) -> some View {
@@ -233,6 +365,22 @@ private struct TopEdgeLineProcessingEffect: View {
         }
 
         return CGFloat(elapsed / duration)
+    }
+
+    private func queuedFadeProgress(seconds: TimeInterval) -> CGFloat {
+        guard let queuedFadeStartedAt else {
+            return 1
+        }
+
+        let duration: TimeInterval = 0.7
+        let elapsed = seconds - queuedFadeStartedAt
+        guard elapsed >= 0, elapsed <= duration else {
+            return 1
+        }
+
+        let progress = CGFloat(elapsed / duration)
+
+        return progress * progress * (3 - (2 * progress))
     }
 }
 
@@ -385,8 +533,8 @@ final class NotchGlowRenderView: NSView {
         metalLayer.framebufferOnly = true
         metalLayer.isOpaque = false
         metalLayer.backgroundColor = NSColor.clear.cgColor
-        metalLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         metalLayer.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)
+        syncDrawableMetrics()
 
         if #available(macOS 26.0, *) {
             metalLayer.preferredDynamicRange = .constrainedHigh
@@ -407,17 +555,19 @@ final class NotchGlowRenderView: NSView {
 
     override func layout() {
         super.layout()
-        metalLayer.frame = bounds
-        metalLayer.drawableSize = CGSize(
-            width: bounds.width * metalLayer.contentsScale,
-            height: bounds.height * metalLayer.contentsScale
-        )
+        syncDrawableMetrics()
         render()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        metalLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        syncDrawableMetrics()
+        render()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        syncDrawableMetrics()
         render()
     }
 
@@ -438,6 +588,17 @@ final class NotchGlowRenderView: NSView {
         self.shape = shape
         self.glowColor = glowColor.usingColorSpace(.deviceRGB) ?? glowColor
         render()
+    }
+
+    private func syncDrawableMetrics() {
+        let scale = window?.backingScaleFactor ?? window?.screen?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        metalLayer.contentsScale = scale
+        metalLayer.rasterizationScale = scale
+        metalLayer.frame = bounds
+        metalLayer.drawableSize = CGSize(
+            width: max(1, bounds.width * scale),
+            height: max(1, bounds.height * scale)
+        )
     }
 
     private func render() {

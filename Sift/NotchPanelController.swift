@@ -26,6 +26,9 @@ final class NotchPanelController {
     private var accumulatedHorizontalScroll: CGFloat = 0
     private var didPageDuringCurrentScrollGesture = false
     private var accumulatedTopEdgePush: CGFloat = 0
+    private var displayedTopEdgePushProgress: CGFloat = 0
+    private var topEdgePushBeganAt: Date?
+    private var lastTopEdgePushEventAt: Date?
     private var lastActivationClickAt = Date.distantPast
     private var lastTopEdgePushAt = Date.distantPast
 
@@ -34,7 +37,10 @@ final class NotchPanelController {
     private let activationHitSize = NSSize(width: 430, height: 96)
     private let activationPanelSize = NSSize(width: 980, height: 220)
     private let fallbackClosedNotchSize = NSSize(width: 185, height: 32)
-    private let topEdgePushThreshold: CGFloat = 34
+    private let topEdgePushThreshold: CGFloat = 68
+    private let topEdgePushMaximumGap: TimeInterval = 0.24
+    private let topEdgePushMinimumDuration: TimeInterval = 0.18
+    private let topEdgeIntentionalBandHeight: CGFloat = 4
 
     init(store: ThoughtStore) {
         self.store = store
@@ -311,16 +317,35 @@ final class NotchPanelController {
             return
         }
 
-        let verticalPressure = abs(deltaY)
-        guard verticalPressure > abs(deltaX) * 0.65, verticalPressure > 0.05 else {
+        guard mouseLocation.y >= screen.frame.maxY - topEdgeIntentionalBandHeight else {
+            resetTopEdgePush()
             return
         }
 
-        accumulatedTopEdgePush += verticalPressure
+        let verticalPressure = abs(deltaY)
+        guard verticalPressure > abs(deltaX) * 1.35, verticalPressure > 0.2 else {
+            if abs(deltaX) > 0.2 || verticalPressure > 0.2 {
+                resetTopEdgePush()
+            }
+            return
+        }
 
         let now = Date()
+        if let lastTopEdgePushEventAt, now.timeIntervalSince(lastTopEdgePushEventAt) > topEdgePushMaximumGap {
+            resetTopEdgePush()
+        }
+
+        if topEdgePushBeganAt == nil {
+            topEdgePushBeganAt = now
+        }
+        lastTopEdgePushEventAt = now
+        accumulatedTopEdgePush += verticalPressure
+        updateTopEdgePushProgress(on: screen)
+
         guard
+            let topEdgePushBeganAt,
             accumulatedTopEdgePush >= topEdgePushThreshold,
+            now.timeIntervalSince(topEdgePushBeganAt) >= topEdgePushMinimumDuration,
             now.timeIntervalSince(lastTopEdgePushAt) > 0.45,
             now.timeIntervalSince(lastActivationClickAt) > 0.24
         else {
@@ -337,13 +362,27 @@ final class NotchPanelController {
         }
 
         lastActivationClickAt = date
-        resetTopEdgePush()
         let activationGlowStrength = activationSurfaces
             .first(where: { $0.screen == screen })?
             .model
             .glowStrengthForTransition ?? 0
+        resetTopEdgePush()
         endActivationHover()
         show(on: screen, activationGlowStrength: max(activationGlowStrength, 0.74))
+    }
+
+    private func updateTopEdgePushProgress(on screen: NSScreen) {
+        let progress = min(1, accumulatedTopEdgePush / topEdgePushThreshold)
+        displayedTopEdgePushProgress += (progress - displayedTopEdgePushProgress) * 0.38
+
+        if progress >= 1 {
+            displayedTopEdgePushProgress = 1
+        }
+
+        activationSurfaces
+            .first(where: { $0.screen == screen })?
+            .model
+            .updateActivationProgress(displayedTopEdgePushProgress)
     }
 
     private func updateActivationHover(at mouseLocation: NSPoint) {
@@ -382,6 +421,10 @@ final class NotchPanelController {
 
     private func resetTopEdgePush() {
         accumulatedTopEdgePush = 0
+        displayedTopEdgePushProgress = 0
+        topEdgePushBeganAt = nil
+        lastTopEdgePushEventAt = nil
+        activationSurfaces.forEach { $0.model.updateActivationProgress(0) }
     }
 
     private func makeActivationPanel(on screen: NSScreen) -> ActivationSurface {

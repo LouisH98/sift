@@ -59,7 +59,7 @@ static float4 topEdgeLineGlowSample(
     }
 
     float lineWidth = clamp(notchSize.x, 96.0, size.x * 0.92);
-    float tabHeight = clamp(notchSize.y * 2.4, 10.0, 18.0);
+    float tabHeight = clamp(notchSize.y * 0.82, 5.0, 30.0);
     float topY = max(0.0, topOffsetInput);
     float centerX = size.x * 0.5;
     float halfLine = lineWidth * 0.5;
@@ -72,23 +72,23 @@ static float4 topEdgeLineGlowSample(
     float tabRadius = tabHeight * 0.58;
     float tabDistance = roundedBoxDistance(position, tabCenter, tabHalfSize, tabRadius);
     float lineDistance = segmentDistance(position, float2(lineLeft + tabRadius, topY), float2(lineRight - tabRadius, topY));
-    float capSoftness = smoothstep(5.0, -1.2, tabDistance);
+    float capSoftness = smoothstep(3.2, -0.9, tabDistance);
     float horizontalTaper = smoothstep(lineLeft - 42.0, lineLeft + 28.0, position.x)
         * (1.0 - smoothstep(lineRight - 28.0, lineRight + 42.0, position.x));
     float downwardMask = smoothstep(topY - 2.0, topY + 1.0, position.y)
-        * (1.0 - smoothstep(topY + 28.0, topY + 128.0, position.y));
+        * (1.0 - smoothstep(topY + tabHeight + 10.0, topY + tabHeight + 128.0, position.y));
     float breath = 0.96 + (sin(time * 1.55) * 0.04);
 
-    float innerFill = smoothstep(1.6, -1.8, tabDistance) * 0.72;
-    float rimCore = exp(-pow(abs(tabDistance) / 1.35, 2.0)) * capSoftness * 0.92;
-    float bloom = exp(-pow(max(tabDistance, 0.0) / 10.5, 2.0)) * 0.5;
-    float halo = exp(-pow(max(tabDistance, 0.0) / 31.0, 2.0)) * 0.22;
-    float wash = exp(-pow(abs(position.y - (topY + 18.0)) / 31.0, 2.0))
+    float innerFill = smoothstep(0.72, -0.86, tabDistance) * 0.52;
+    float rimCore = exp(-pow(abs(tabDistance) / 0.58, 2.0)) * capSoftness * 1.36;
+    float bloom = exp(-pow(max(tabDistance, 0.0) / 9.2, 2.0)) * 0.56;
+    float halo = exp(-pow(max(tabDistance, 0.0) / 30.0, 2.0)) * 0.24;
+    float wash = exp(-pow(abs(position.y - (topY + tabHeight)) / 24.0, 2.0))
         * exp(-pow(abs(normalizedX) / 0.92, 4.0))
-        * 0.32;
-    float lipHighlight = exp(-pow(lineDistance / 2.2, 2.0))
-        * exp(-pow((position.y - topY) / 4.8, 2.0))
-        * 0.52;
+        * 0.38;
+    float lipHighlight = exp(-pow(lineDistance / 0.82, 2.0))
+        * exp(-pow((position.y - topY) / 2.1, 2.0))
+        * 0.68;
     float energy = (innerFill + rimCore + bloom + halo + wash + lipHighlight) * horizontalTaper * downwardMask * breath;
     float alpha = clamp(energy * strength, 0.0, 0.82);
 
