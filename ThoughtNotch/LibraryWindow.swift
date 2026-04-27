@@ -13,7 +13,10 @@ struct LibraryWindow: View {
     @State private var mode: Mode = .distilled
     @State private var searchText = ""
     @State private var selectedPageID: UUID?
+    @State private var rawSelectionMode = false
+    @State private var selectedThoughtIDs = Set<UUID>()
     @State private var pendingThoughtDeletion: Thought?
+    @State private var pendingBulkThoughtDeletion = false
     @State private var pendingPageDeletion: ThoughtPage?
     @State private var reorganizationProposal: ReorganizationProposal?
 
@@ -38,17 +41,21 @@ struct LibraryWindow: View {
 
             Divider()
 
-            switch mode {
-            case .raw:
-                rawView
-            case .distilled:
-                distilledView
-            }
+            notebookView
         }
         .frame(minWidth: 760, minHeight: 520)
         .onAppear(perform: ensureSelection)
         .onChange(of: store.pages.map(\.id)) { _, _ in
             ensureSelection()
+        }
+        .onChange(of: store.thoughts.map(\.id)) { _, ids in
+            selectedThoughtIDs.formIntersection(Set(ids))
+        }
+        .onChange(of: mode) { _, mode in
+            if mode != .raw {
+                rawSelectionMode = false
+                selectedThoughtIDs.removeAll()
+            }
         }
         .alert("Delete Thought?", isPresented: deleteThoughtBinding) {
             Button("Delete", role: .destructive) {
@@ -63,6 +70,20 @@ struct LibraryWindow: View {
             }
         } message: {
             Text("This removes the raw thought, its action items, and marks affected pages stale.")
+        }
+        .alert("Delete Selected Thoughts?", isPresented: $pendingBulkThoughtDeletion) {
+            Button("Delete \(selectedThoughtIDs.count)", role: .destructive) {
+                for thoughtID in selectedThoughtIDs {
+                    store.deleteThought(thoughtID)
+                }
+
+                selectedThoughtIDs.removeAll()
+                rawSelectionMode = false
+            }
+
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the selected raw thoughts, their action items, and marks affected pages stale.")
         }
         .alert("Delete Page?", isPresented: deletePageBinding) {
             Button("Delete Page", role: .destructive) {
@@ -117,6 +138,10 @@ struct LibraryWindow: View {
                     .lineLimit(1)
             }
 
+            if mode == .raw {
+                rawBulkToolbar
+            }
+
             Button {
                 Task {
                     reorganizationProposal = await reorganizer.makeProposal()
@@ -130,7 +155,77 @@ struct LibraryWindow: View {
     }
 
     @ViewBuilder
-    private var rawView: some View {
+    private var rawBulkToolbar: some View {
+        Divider()
+            .frame(height: 18)
+
+        Button {
+            withAnimation(.smooth(duration: 0.18)) {
+                rawSelectionMode.toggle()
+                if !rawSelectionMode {
+                    selectedThoughtIDs.removeAll()
+                }
+            }
+        } label: {
+            Label(rawSelectionMode ? "Done" : "Select", systemImage: rawSelectionMode ? "checkmark" : "checklist")
+        }
+
+        if rawSelectionMode {
+            Button {
+                selectedThoughtIDs = Set(filteredThoughts.map(\.id))
+            } label: {
+                Label("All", systemImage: "checkmark.circle")
+            }
+            .disabled(filteredThoughts.isEmpty)
+
+            Button {
+                selectedThoughtIDs.removeAll()
+            } label: {
+                Label("Clear", systemImage: "circle")
+            }
+            .disabled(selectedThoughtIDs.isEmpty)
+
+            Button(role: .destructive) {
+                pendingBulkThoughtDeletion = true
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(selectedThoughtIDs.isEmpty)
+            .help(selectedThoughtIDs.isEmpty ? "Select thoughts to delete" : "Delete \(selectedThoughtIDs.count) selected thoughts")
+        }
+    }
+
+    private var notebookView: some View {
+        NavigationSplitView {
+            switch mode {
+            case .raw:
+                RawManagementSidebar(
+                    visibleThoughtCount: filteredThoughts.count,
+                    totalThoughtCount: store.thoughts.count,
+                    selectionMode: $rawSelectionMode,
+                    selectedThoughtIDs: $selectedThoughtIDs
+                )
+                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
+            case .distilled:
+                PageSidebar(
+                    pages: store.pages,
+                    selectedPageID: $selectedPageID
+                )
+                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
+            }
+        } detail: {
+            switch mode {
+            case .raw:
+                rawDetailView
+            case .distilled:
+                distilledDetailView
+            }
+        }
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    @ViewBuilder
+    private var rawDetailView: some View {
         if store.thoughts.isEmpty {
             ContentUnavailableView(
                 "No Thoughts Yet",
@@ -140,51 +235,67 @@ struct LibraryWindow: View {
         } else if filteredThoughts.isEmpty {
             ContentUnavailableView.search(text: searchText)
         } else {
-            List(filteredThoughts) { thought in
-                RawThoughtRow(
-                    thought: thought,
-                    page: store.page(with: thought.pageID),
-                    onDelete: {
-                        pendingThoughtDeletion = thought
+            VStack(spacing: 0) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Raw Thoughts")
+                            .font(.title2.weight(.semibold))
+
+                        Text(rawSelectionMode ? "\(selectedThoughtIDs.count) selected" : "\(filteredThoughts.count) visible")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                )
-                .padding(.vertical, 4)
+
+                    Spacer()
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+
+                Divider()
+
+                List(filteredThoughts) { thought in
+                    RawThoughtRow(
+                        thought: thought,
+                        page: store.page(with: thought.pageID),
+                        isSelecting: rawSelectionMode,
+                        isSelected: selectedThoughtIDs.contains(thought.id),
+                        onToggleSelection: {
+                            toggleRawSelection(thought.id)
+                        },
+                        onDelete: {
+                            pendingThoughtDeletion = thought
+                        }
+                    )
+                    .padding(.vertical, 4)
+                }
+                .listStyle(.inset)
             }
-            .listStyle(.inset)
         }
     }
 
-    private var distilledView: some View {
-        NavigationSplitView {
-            PageSidebar(
+    @ViewBuilder
+    private var distilledDetailView: some View {
+        if let selectedPage {
+            PageDetailView(
+                page: selectedPage,
                 pages: store.pages,
-                selectedPageID: $selectedPageID
+                thoughts: linkedThoughts(for: selectedPage),
+                childPages: childPages(for: selectedPage.id),
+                store: store,
+                onDelete: {
+                    pendingPageDeletion = selectedPage
+                },
+                onSelectPage: { pageID in
+                    selectedPageID = pageID
+                }
             )
-            .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
-        } detail: {
-            if let selectedPage {
-                PageDetailView(
-                    page: selectedPage,
-                    pages: store.pages,
-                    thoughts: linkedThoughts(for: selectedPage),
-                    childPages: childPages(for: selectedPage.id),
-                    store: store,
-                    onDelete: {
-                        pendingPageDeletion = selectedPage
-                    },
-                    onSelectPage: { pageID in
-                        selectedPageID = pageID
-                    }
-                )
-            } else {
-                ContentUnavailableView(
-                    store.pages.isEmpty ? "No Pages Yet" : "Select a Page",
-                    systemImage: "doc.text.magnifyingglass",
-                    description: Text(store.pages.isEmpty ? "New notebook pages appear after thoughts are processed." : "Choose a page in the sidebar.")
-                )
-            }
+        } else {
+            ContentUnavailableView(
+                store.pages.isEmpty ? "No Pages Yet" : "Select a Page",
+                systemImage: "doc.text.magnifyingglass",
+                description: Text(store.pages.isEmpty ? "New notebook pages appear after thoughts are processed." : "Choose a page in the sidebar.")
+            )
         }
-        .navigationSplitViewStyle(.balanced)
     }
 
     private var selectedPage: ThoughtPage? {
@@ -247,15 +358,66 @@ struct LibraryWindow: View {
             .filter { $0.parentID == parentID }
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
+
+    private func toggleRawSelection(_ id: UUID) {
+        if selectedThoughtIDs.contains(id) {
+            selectedThoughtIDs.remove(id)
+        } else {
+            selectedThoughtIDs.insert(id)
+        }
+    }
+}
+
+private struct RawManagementSidebar: View {
+    let visibleThoughtCount: Int
+    let totalThoughtCount: Int
+    @Binding var selectionMode: Bool
+    @Binding var selectedThoughtIDs: Set<UUID>
+
+    var body: some View {
+        List {
+            Section {
+                Label("\(totalThoughtCount) thoughts", systemImage: "text.bubble")
+                Label("\(visibleThoughtCount) visible", systemImage: "line.3.horizontal.decrease.circle")
+
+                if selectionMode {
+                    Label("\(selectedThoughtIDs.count) selected", systemImage: "checkmark.circle")
+                }
+            }
+
+            if selectionMode {
+                Section {
+                    Text("Use the top toolbar to select all, clear, or delete selected thoughts.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .navigationTitle("Thoughts")
+    }
 }
 
 private struct RawThoughtRow: View {
     let thought: Thought
     let page: ThoughtPage?
+    let isSelecting: Bool
+    let isSelected: Bool
+    let onToggleSelection: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
+            if isSelecting {
+                Button(action: onToggleSelection) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
+            }
+
             VStack(alignment: .leading, spacing: 7) {
                 Text(thought.title ?? "Untitled Thought")
                     .font(.headline)
@@ -295,11 +457,19 @@ private struct RawThoughtRow: View {
 
             Spacer()
 
-            Button(role: .destructive, action: onDelete) {
-                Image(systemName: "trash")
+            if !isSelecting {
+                Button(role: .destructive, action: onDelete) {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("Delete thought")
             }
-            .buttonStyle(.borderless)
-            .help("Delete thought")
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if isSelecting {
+                onToggleSelection()
+            }
         }
     }
 
