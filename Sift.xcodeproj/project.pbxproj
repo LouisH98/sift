@@ -12,13 +12,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		B1DE41362F9F61AC007A9FC8 /* ThoughtNotch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ThoughtNotch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1DE41362F9F61AC007A9FC8 /* Sift.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Sift.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		B1DE41382F9F61AC007A9FC8 /* ThoughtNotch */ = {
+		B1DE41382F9F61AC007A9FC8 /* Sift */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = ThoughtNotch;
+			path = Sift;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -39,7 +39,7 @@
 		B1DE412D2F9F61AC007A9FC8 = {
 			isa = PBXGroup;
 			children = (
-				B1DE41382F9F61AC007A9FC8 /* ThoughtNotch */,
+				B1DE41382F9F61AC007A9FC8 /* Sift */,
 				B1DE41372F9F61AC007A9FC8 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -47,7 +47,7 @@
 		B1DE41372F9F61AC007A9FC8 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				B1DE41362F9F61AC007A9FC8 /* ThoughtNotch.app */,
+				B1DE41362F9F61AC007A9FC8 /* Sift.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -55,9 +55,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		B1DE41352F9F61AC007A9FC8 /* ThoughtNotch */ = {
+		B1DE41352F9F61AC007A9FC8 /* Sift */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = B1DE41412F9F61AD007A9FC8 /* Build configuration list for PBXNativeTarget "ThoughtNotch" */;
+			buildConfigurationList = B1DE41412F9F61AD007A9FC8 /* Build configuration list for PBXNativeTarget "Sift" */;
 			buildPhases = (
 				B1DE41322F9F61AC007A9FC8 /* Sources */,
 				B1DE41332F9F61AC007A9FC8 /* Frameworks */,
@@ -68,15 +68,15 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				B1DE41382F9F61AC007A9FC8 /* ThoughtNotch */,
+				B1DE41382F9F61AC007A9FC8 /* Sift */,
 			);
-			name = ThoughtNotch;
+			name = Sift;
 			packageProductDependencies = (
 				B1DE41462F9F6AA0007A9FC8 /* KeyboardShortcuts */,
 				B1DE41492F9F7B24007A9FC8 /* Markdown */,
 			);
-			productName = ThoughtNotch;
-			productReference = B1DE41362F9F61AC007A9FC8 /* ThoughtNotch.app */;
+			productName = Sift;
+			productReference = B1DE41362F9F61AC007A9FC8 /* Sift.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -94,7 +94,7 @@
 					};
 				};
 			};
-			buildConfigurationList = B1DE41312F9F61AC007A9FC8 /* Build configuration list for PBXProject "ThoughtNotch" */;
+			buildConfigurationList = B1DE41312F9F61AC007A9FC8 /* Build configuration list for PBXProject "Sift" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -112,7 +112,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				B1DE41352F9F61AC007A9FC8 /* ThoughtNotch */,
+				B1DE41352F9F61AC007A9FC8 /* Sift */,
 			);
 		};
 /* End PBXProject section */
@@ -267,9 +267,10 @@
 				INFOPLIST_KEY_LSUIElement = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.louis.ThoughtNotch;
+				INFOPLIST_KEY_CFBundleDisplayName = Sift;
+				PRODUCT_BUNDLE_IDENTIFIER = com.louis.Sift;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
@@ -298,9 +299,10 @@
 				INFOPLIST_KEY_LSUIElement = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.louis.ThoughtNotch;
+				INFOPLIST_KEY_CFBundleDisplayName = Sift;
+				PRODUCT_BUNDLE_IDENTIFIER = com.louis.Sift;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
@@ -317,7 +319,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		B1DE41312F9F61AC007A9FC8 /* Build configuration list for PBXProject "ThoughtNotch" */ = {
+		B1DE41312F9F61AC007A9FC8 /* Build configuration list for PBXProject "Sift" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B1DE413F2F9F61AD007A9FC8 /* Debug */,
@@ -326,7 +328,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		B1DE41412F9F61AD007A9FC8 /* Build configuration list for PBXNativeTarget "ThoughtNotch" */ = {
+		B1DE41412F9F61AD007A9FC8 /* Build configuration list for PBXNativeTarget "Sift" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B1DE41422F9F61AD007A9FC8 /* Debug */,

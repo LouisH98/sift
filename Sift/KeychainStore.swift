@@ -2,9 +2,29 @@ import Foundation
 import Security
 
 enum KeychainStore {
-    private static let service = "com.louis.ThoughtNotch"
+    private static let service = AppIdentity.bundleIdentifier
 
     static func string(for account: String) -> String {
+        keychainString(for: account, service: service) ?? fileBackedString(for: account) ?? ""
+    }
+
+    static func set(_ value: String, for account: String) {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty else {
+            deleteKeychainString(for: account, service: service)
+            deleteFileBackedString(for: account)
+            return
+        }
+
+        if setKeychainString(trimmedValue, for: account, service: service) {
+            deleteFileBackedString(for: account)
+            return
+        }
+
+        setFileBackedString(trimmedValue, for: account)
+    }
+
+    private static func keychainString(for account: String, service: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -22,22 +42,16 @@ enum KeychainStore {
             return value
         }
 
-        return fileBackedString(for: account)
+        return nil
     }
 
-    static func set(_ value: String, for account: String) {
+    private static func setKeychainString(_ value: String, for account: String, service: String) -> Bool {
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecUseDataProtectionKeychain as String: true
         ]
-
-        guard !value.isEmpty else {
-            SecItemDelete(baseQuery as CFDictionary)
-            deleteFileBackedString(for: account)
-            return
-        }
 
         let data = Data(value.utf8)
         let attributes: [String: Any] = [
@@ -50,22 +64,27 @@ enum KeychainStore {
             var addQuery = baseQuery
             addQuery[kSecValueData as String] = data
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            if SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess {
-                deleteFileBackedString(for: account)
-                return
-            }
-        } else if status == errSecSuccess {
-            deleteFileBackedString(for: account)
-            return
+            return SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess
         }
 
-        setFileBackedString(value, for: account)
+        return status == errSecSuccess
     }
 
-    private static func fileBackedString(for account: String) -> String {
+    private static func deleteKeychainString(for account: String, service: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecUseDataProtectionKeychain as String: true
+        ]
+
+        SecItemDelete(query as CFDictionary)
+    }
+
+    private static func fileBackedString(for account: String) -> String? {
         guard let data = try? Data(contentsOf: fileBackedURL(for: account)),
               let value = String(data: data, encoding: .utf8) else {
-            return ""
+            return nil
         }
 
         return value
@@ -91,9 +110,7 @@ enum KeychainStore {
     }
 
     private static func fileBackedURL(for account: String) -> URL {
-        let applicationSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return applicationSupportURL
-            .appendingPathComponent("ThoughtNotch", isDirectory: true)
+        AppIdentity.applicationSupportDirectory()
             .appendingPathComponent("\(account).secret", isDirectory: false)
     }
 }

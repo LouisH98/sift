@@ -614,7 +614,7 @@ final class NotchPanelController {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
 
-        guard let actionView = panel.contentView?.firstDescendant(withIdentifier: .thoughtNotchActionKeyboardCatcher) else {
+        guard let actionView = panel.contentView?.firstDescendant(withIdentifier: .siftActionKeyboardCatcher) else {
             return
         }
 

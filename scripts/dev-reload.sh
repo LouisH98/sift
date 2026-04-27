@@ -4,13 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
-PROJECT="$PROJECT_DIR/ThoughtNotch.xcodeproj"
-SCHEME="ThoughtNotch"
+PROJECT="$PROJECT_DIR/Sift.xcodeproj"
+SCHEME="Sift"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-DERIVED_DATA="${DERIVED_DATA:-/tmp/ThoughtNotchDevDerivedData}"
+DERIVED_DATA="${DERIVED_DATA:-/tmp/SiftDevDerivedData}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/Applications}"
-APP_NAME="ThoughtNotch.app"
-APP_EXECUTABLE="ThoughtNotch"
+APP_NAME="Sift.app"
+APP_EXECUTABLE="Sift"
 POLL_INTERVAL="${POLL_INTERVAL:-0.5}"
 DEBOUNCE_INTERVAL="${DEBOUNCE_INTERVAL:-0.25}"
 LAUNCH="${LAUNCH:-1}"
@@ -20,12 +20,12 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") [--once]
 
-Watches ThoughtNotch source files, then rebuilds, reinstalls, and relaunches
+Watches Sift source files, then rebuilds, reinstalls, and relaunches
 $INSTALL_DIR/$APP_NAME whenever they change.
 
 Environment:
   CONFIGURATION      Xcode configuration to build. Default: Debug
-  DERIVED_DATA       DerivedData path. Default: /tmp/ThoughtNotchDevDerivedData
+  DERIVED_DATA       DerivedData path. Default: /tmp/SiftDevDerivedData
   INSTALL_DIR        App install directory. Default: \$HOME/Applications
   POLL_INTERVAL      File-change polling interval in seconds. Default: 0.5
   DEBOUNCE_INTERVAL  Delay after detecting a change before rebuilding. Default: 0.25
@@ -50,9 +50,9 @@ DEST_APP="$INSTALL_DIR/$APP_NAME"
 
 snapshot() {
   /usr/bin/find \
-    "$PROJECT_DIR/ThoughtNotch" \
-    "$PROJECT_DIR/ThoughtNotch.xcodeproj/project.pbxproj" \
-    "$PROJECT_DIR/ThoughtNotch.xcodeproj/project.xcworkspace/contents.xcworkspacedata" \
+    "$PROJECT_DIR/Sift" \
+    "$PROJECT_DIR/Sift.xcodeproj/project.pbxproj" \
+    "$PROJECT_DIR/Sift.xcodeproj/project.xcworkspace/contents.xcworkspacedata" \
     -type f \
     ! -path "*/xcuserdata/*" \
     -print0 \

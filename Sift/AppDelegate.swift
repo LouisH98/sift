@@ -107,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 backing: .buffered,
                 defer: false
             )
-            window.title = "Thought Library"
+            window.title = "Sift Library"
             window.center()
             window.contentView = NSHostingView(rootView: LibraryWindow(store: store))
             window.isReleasedWhenClosed = false
@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 backing: .buffered,
                 defer: false
             )
-            window.title = "ThoughtNotch Settings"
+            window.title = "Sift Settings"
             window.center()
             window.contentView = NSHostingView(rootView: SettingsView())
             window.isReleasedWhenClosed = false

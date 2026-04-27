@@ -439,7 +439,7 @@ private struct ActionKeyboardCatcher: NSViewRepresentable {
 
     func makeNSView(context: Context) -> ActionKeyView {
         let view = ActionKeyView()
-        view.identifier = .thoughtNotchActionKeyboardCatcher
+        view.identifier = .siftActionKeyboardCatcher
         view.onMove = onMove
         view.onToggle = onToggle
         view.onCancel = onCancel
@@ -487,7 +487,7 @@ private struct ActionKeyboardCatcher: NSViewRepresentable {
 }
 
 extension NSUserInterfaceItemIdentifier {
-    static let thoughtNotchActionKeyboardCatcher = Self("ThoughtNotchActionKeyboardCatcher")
+    static let siftActionKeyboardCatcher = Self("SiftActionKeyboardCatcher")
 }
 
 private extension ThoughtStore {

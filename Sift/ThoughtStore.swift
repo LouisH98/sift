@@ -21,8 +21,7 @@ final class ThoughtStore: ObservableObject {
     private let decoder: JSONDecoder
 
     private init() {
-        let supportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let directoryURL = supportURL.appendingPathComponent("ThoughtNotch", isDirectory: true)
+        let directoryURL = AppIdentity.applicationSupportDirectory()
         thoughtsURL = directoryURL.appendingPathComponent("thoughts.json")
         themesURL = directoryURL.appendingPathComponent("themes.json")
         pagesURL = directoryURL.appendingPathComponent("pages.json")
@@ -241,7 +240,7 @@ final class ThoughtStore: ObservableObject {
         saveActionItems()
         savePages()
 
-        NSLog("ThoughtNotch moved thoughts from deleted page \(deletedPage.title) to Unsorted.")
+            NSLog("Sift moved thoughts from deleted page \(deletedPage.title) to Unsorted.")
     }
 
     func deleteThought(_ id: UUID) {
@@ -457,7 +456,7 @@ final class ThoughtStore: ObservableObject {
             let data = try Data(contentsOf: url)
             return try decoder.decode([T].self, from: data)
         } catch {
-            NSLog("ThoughtNotch failed to load \(url.lastPathComponent): \(error.localizedDescription)")
+            NSLog("Sift failed to load \(url.lastPathComponent): \(error.localizedDescription)")
             return fallback
         }
     }
@@ -492,7 +491,7 @@ final class ThoughtStore: ObservableObject {
             let data = try encoder.encode(value)
             try data.write(to: url, options: [.atomic])
         } catch {
-            NSLog("ThoughtNotch failed to save \(url.lastPathComponent): \(error.localizedDescription)")
+            NSLog("Sift failed to save \(url.lastPathComponent): \(error.localizedDescription)")
         }
     }
 

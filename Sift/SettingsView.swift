@@ -45,13 +45,13 @@ struct SettingsView: View {
             }
 
             Section("Startup") {
-                Toggle("Open ThoughtNotch at login", isOn: Binding(
+                Toggle("Open Sift at login", isOn: Binding(
                     get: { launchAtLoginStatus == .enabled },
                     set: setLaunchAtLogin
                 ))
 
                 if launchAtLoginStatus == .requiresApproval {
-                    Text("Approve ThoughtNotch in System Settings > General > Login Items.")
+                    Text("Approve Sift in System Settings > General > Login Items.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else if let launchAtLoginError {

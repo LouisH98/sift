@@ -253,7 +253,7 @@ private final class CommandTextView: NSTextView {
     var onCancel: (() -> Void)?
     var onPageDelta: ((Int) -> Void)?
     var placeholderString: String?
-    private let prefixHighlightAttribute = NSAttributedString.Key("ThoughtNotchThemePrefixHighlight")
+    private let prefixHighlightAttribute = NSAttributedString.Key("SiftThemePrefixHighlight")
 
     func refreshThemePrefixHighlight() {
         guard let layoutManager else {

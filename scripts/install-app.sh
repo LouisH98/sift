@@ -4,12 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
-PROJECT="$PROJECT_DIR/ThoughtNotch.xcodeproj"
-SCHEME="ThoughtNotch"
+PROJECT="$PROJECT_DIR/Sift.xcodeproj"
+SCHEME="Sift"
 CONFIGURATION="${CONFIGURATION:-Release}"
-DERIVED_DATA="${DERIVED_DATA:-/tmp/ThoughtNotchDerivedData}"
+DERIVED_DATA="${DERIVED_DATA:-/tmp/SiftDerivedData}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/Applications}"
-APP_NAME="ThoughtNotch.app"
+APP_NAME="Sift.app"
 
 echo "Building $SCHEME ($CONFIGURATION)..."
 /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \

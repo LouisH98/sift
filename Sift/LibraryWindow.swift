@@ -13,6 +13,15 @@ struct LibraryWindow: View {
         case distilled = "Distilled"
 
         var id: String { rawValue }
+
+        var iconName: String {
+            switch self {
+            case .synthesis:
+                return "sparkles"
+            case .distilled:
+                return "doc.text.magnifyingglass"
+            }
+        }
     }
 
     @ObservedObject var store: ThoughtStore
@@ -27,6 +36,7 @@ struct LibraryWindow: View {
     @State private var pendingBulkThoughtDeletion = false
     @State private var pendingPageDeletion: ThoughtPage?
     @State private var reorganizationProposal: ReorganizationProposal?
+    @Namespace private var toolbarGlassNamespace
 
     private var filteredThoughts: [Thought] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -47,11 +57,19 @@ struct LibraryWindow: View {
         VStack(spacing: 0) {
             toolbar
 
-            Divider()
-
             notebookView
         }
         .frame(minWidth: 760, minHeight: 520)
+        .background {
+            LinearGradient(
+                colors: [
+                    Color.accentColor.opacity(0.08),
+                    Color.clear
+                ],
+                startPoint: .top,
+                endPoint: .center
+            )
+        }
         .onAppear {
             ensureSelection()
             ThoughtProcessor.shared.synthesizeStalePages()
@@ -131,67 +149,127 @@ struct LibraryWindow: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 12) {
-            Picker("View", selection: $mode) {
-                ForEach(Mode.allCases) { mode in
-                    Text(mode.rawValue).tag(mode)
+        GlassEffectContainer(spacing: 12) {
+            HStack(spacing: 10) {
+                modeControl
+
+                searchControl
+
+                Spacer(minLength: 12)
+
+                if let error = reorganizer.lastError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
                 }
+
+                if mode == .raw {
+                    rawBulkToolbar
+                } else {
+                    pageViewToolbar
+                }
+
+                Button {
+                    Task {
+                        reorganizationProposal = await reorganizer.makeProposal()
+                    }
+                } label: {
+                    Label(reorganizer.isReorganizing ? "Tidying..." : "Tidy", systemImage: "wand.and.sparkles")
+                }
+                .buttonStyle(.glassProminent)
+                .disabled(reorganizer.isReorganizing || store.thoughts.isEmpty)
             }
-            .pickerStyle(.segmented)
-            .frame(width: 190)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+    }
+
+    private var modeControl: some View {
+        HStack(spacing: 4) {
+            ForEach(Mode.allCases) { item in
+                Button {
+                    withAnimation(.smooth(duration: 0.18)) {
+                        mode = item
+                    }
+                } label: {
+                    Text(item.rawValue)
+                        .font(.callout.weight(item == mode ? .semibold : .medium))
+                        .foregroundStyle(item == mode ? .primary : .secondary)
+                        .frame(minWidth: 76)
+                        .padding(.horizontal, 10)
+                        .frame(height: 28)
+                        .background {
+                            if item == mode {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(.primary.opacity(0.10))
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .help(item.rawValue)
+            }
+        }
+        .padding(4)
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+    }
+
+    private var searchControl: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
 
             TextField("Search thoughts", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 320)
+                .textFieldStyle(.plain)
 
-            Spacer()
-
-            if let error = reorganizer.lastError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .lineLimit(1)
-            }
-
-            if mode == .raw {
-                rawBulkToolbar
-            } else {
-                pageViewToolbar
-            }
-
-            Button {
-                Task {
-                    reorganizationProposal = await reorganizer.makeProposal()
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
                 }
-            } label: {
-                Label(reorganizer.isReorganizing ? "Tidying..." : "Tidy", systemImage: "wand.and.sparkles")
+                .buttonStyle(.plain)
+                .help("Clear search")
             }
-            .disabled(reorganizer.isReorganizing || store.thoughts.isEmpty)
         }
-        .padding(12)
+        .padding(.horizontal, 11)
+        .frame(width: 300, height: 36)
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
     }
 
     private var pageViewToolbar: some View {
-        Picker("Page View", selection: $pageViewMode) {
-            Image(systemName: "sparkles")
-                .tag(PageViewMode.synthesis)
-                .help("Synthesis")
-
-            Image(systemName: "doc.text.magnifyingglass")
-                .tag(PageViewMode.distilled)
-                .help("Distilled")
+        HStack(spacing: 4) {
+            ForEach(PageViewMode.allCases) { item in
+                Button {
+                    withAnimation(.smooth(duration: 0.18)) {
+                        pageViewMode = item
+                    }
+                } label: {
+                    Image(systemName: item.iconName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(item == pageViewMode ? .primary : .secondary)
+                        .frame(width: 30, height: 28)
+                        .background {
+                            if item == pageViewMode {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(.primary.opacity(0.10))
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .help(item.rawValue)
+            }
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .frame(width: 82)
+        .padding(4)
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
         .help(pageViewMode.rawValue)
     }
 
     @ViewBuilder
     private var rawBulkToolbar: some View {
-        Divider()
-            .frame(height: 18)
-
         Button {
             withAnimation(.smooth(duration: 0.18)) {
                 rawSelectionMode.toggle()
@@ -202,6 +280,9 @@ struct LibraryWindow: View {
         } label: {
             Label(rawSelectionMode ? "Done" : "Select", systemImage: rawSelectionMode ? "checkmark" : "checklist")
         }
+        .buttonStyle(.glass)
+        .glassEffectID("raw-select", in: toolbarGlassNamespace)
+        .glassEffectTransition(.matchedGeometry)
 
         if rawSelectionMode {
             Button {
@@ -209,22 +290,34 @@ struct LibraryWindow: View {
             } label: {
                 Label("All", systemImage: "checkmark.circle")
             }
+            .buttonStyle(.glass)
             .disabled(filteredThoughts.isEmpty)
+            .glassEffectID("raw-select-all", in: toolbarGlassNamespace)
+            .glassEffectTransition(.matchedGeometry)
+            .transition(.opacity.combined(with: .scale(scale: 0.96)))
 
             Button {
                 selectedThoughtIDs.removeAll()
             } label: {
                 Label("Clear", systemImage: "circle")
             }
+            .buttonStyle(.glass)
             .disabled(selectedThoughtIDs.isEmpty)
+            .glassEffectID("raw-clear", in: toolbarGlassNamespace)
+            .glassEffectTransition(.matchedGeometry)
+            .transition(.opacity.combined(with: .scale(scale: 0.96)))
 
             Button(role: .destructive) {
                 pendingBulkThoughtDeletion = true
             } label: {
                 Label("Delete", systemImage: "trash")
             }
+            .buttonStyle(.glass)
             .disabled(selectedThoughtIDs.isEmpty)
             .help(selectedThoughtIDs.isEmpty ? "Select thoughts to delete" : "Delete \(selectedThoughtIDs.count) selected thoughts")
+            .glassEffectID("raw-delete", in: toolbarGlassNamespace)
+            .glassEffectTransition(.matchedGeometry)
+            .transition(.opacity.combined(with: .scale(scale: 0.96)))
         }
     }
 
@@ -540,7 +633,11 @@ private struct PageSidebar: View {
             } else {
                 OutlineGroup(nodes, children: \.children) { node in
                     Label {
-                        HStack {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(Color.thoughtCategoryColor(hex: node.page.colorHex))
+                                .frame(width: 7, height: 7)
+
                             Text(node.page.title)
                                 .lineLimit(1)
 
@@ -553,7 +650,7 @@ private struct PageSidebar: View {
                         }
                     } icon: {
                         Image(systemName: (node.children?.isEmpty ?? true) ? "doc.text" : "folder")
-                            .foregroundStyle(Color.thoughtCategoryColor(hex: node.page.colorHex))
+                            .foregroundStyle(.secondary)
                     }
                     .tag(node.page.id)
                 }
@@ -574,6 +671,7 @@ private struct PageDetailView: View {
     let onSelectPage: (UUID) -> Void
 
     @State private var editedTitle = ""
+    @Namespace private var pageGlassNamespace
 
     var body: some View {
         ScrollView {
@@ -587,6 +685,9 @@ private struct PageDetailView: View {
                         Label("Stale", systemImage: "arrow.triangle.2.circlepath")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.orange)
+                            .padding(.horizontal, 10)
+                            .frame(height: 26)
+                            .glassEffect(.regular.tint(.orange.opacity(0.14)), in: .rect(cornerRadius: 13))
                     }
 
                     Circle()
@@ -594,11 +695,17 @@ private struct PageDetailView: View {
                         .frame(width: 12, height: 12)
                 }
 
-                HStack(spacing: 8) {
-                    MovePageMenu(page: page, pages: pages, store: store)
+                GlassEffectContainer(spacing: 10) {
+                    HStack(spacing: 8) {
+                        MovePageMenu(page: page, pages: pages, store: store)
+                            .buttonStyle(.glass)
+                            .glassEffectID("move-page", in: pageGlassNamespace)
 
-                    Button(role: .destructive, action: onDelete) {
-                        Label("Delete", systemImage: "trash")
+                        Button(role: .destructive, action: onDelete) {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        .buttonStyle(.glass)
+                        .glassEffectID("delete-page", in: pageGlassNamespace)
                     }
                 }
 
@@ -614,28 +721,28 @@ private struct PageDetailView: View {
                         Text("Subpages")
                             .font(.headline)
 
-                        ForEach(childPages) { childPage in
-                            Button {
-                                onSelectPage(childPage.id)
-                            } label: {
-                                HStack {
-                                    Image(systemName: "doc.text")
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(childPage.title)
-                                            .font(.callout.weight(.medium))
-                                        if !childPage.summary.isEmpty {
-                                            Text(childPage.summary)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(2)
+                        GlassEffectContainer(spacing: 10) {
+                            ScrollView(.horizontal) {
+                                HStack(spacing: 8) {
+                                    ForEach(childPages) { childPage in
+                                        Button {
+                                            onSelectPage(childPage.id)
+                                        } label: {
+                                            Label(childPage.title, systemImage: "doc.text")
+                                                .font(.callout.weight(.medium))
+                                                .lineLimit(1)
+                                                .padding(.horizontal, 12)
+                                                .frame(height: 32)
+                                                .contentShape(Rectangle())
                                         }
+                                        .buttonStyle(.plain)
+                                        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+                                        .help(childPage.summary.isEmpty ? childPage.title : childPage.summary)
                                     }
-                                    Spacer()
                                 }
-                                .contentShape(Rectangle())
+                                .padding(.vertical, 1)
                             }
-                            .buttonStyle(.plain)
-                            .padding(.vertical, 4)
+                            .scrollIndicators(.hidden)
                         }
                     }
                 }
@@ -710,6 +817,9 @@ private struct PageDetailView: View {
                     Label("Updating", systemImage: "sparkles")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .frame(height: 24)
+                        .glassEffect(.regular.tint(.orange.opacity(0.12)), in: .rect(cornerRadius: 12))
                 } else if let synthesizedAt = page.synthesizedAt {
                     Text(synthesizedAt.formatted(date: .abbreviated, time: .shortened))
                         .font(.caption)

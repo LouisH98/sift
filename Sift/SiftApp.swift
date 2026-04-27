@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @main
-struct ThoughtNotchApp: App {
+struct SiftApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = ThoughtStore.shared
     @StateObject private var processor = ThoughtProcessor.shared
@@ -23,7 +23,7 @@ struct ThoughtNotchApp: App {
 
             Divider()
 
-            Button("Quit ThoughtNotch") {
+            Button("Quit Sift") {
                 NSApp.terminate(nil)
             }
         } label: {
@@ -92,7 +92,7 @@ private struct MenuBarStatusLabel: View {
         } else if isProcessing {
             status = "Processing thoughts"
         } else {
-            status = "ThoughtNotch idle"
+            status = "Sift idle"
         }
 
         return "\(status). \(todoCount) todos."

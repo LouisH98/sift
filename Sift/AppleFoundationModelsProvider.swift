@@ -790,7 +790,7 @@ private struct FoundationTagSuggestions {
 @available(macOS 26.0, *)
 private struct NotebookSearchTool: Tool {
     let name = "searchNotebookContext"
-    let description = "Search local ThoughtNotch pages and thoughts by query. Read-only."
+    let description = "Search local Sift pages and thoughts by query. Read-only."
     let store: ThoughtStore
 
     @Generable
@@ -840,7 +840,7 @@ private struct NotebookSearchTool: Tool {
 @available(macOS 26.0, *)
 private struct PageContextTool: Tool {
     let name = "getPageContext"
-    let description = "Fetch a local ThoughtNotch page and its linked thoughts by page UUID. Read-only."
+    let description = "Fetch a local Sift page and its linked thoughts by page UUID. Read-only."
     let store: ThoughtStore
 
     @Generable
