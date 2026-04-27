@@ -119,7 +119,7 @@ struct NotchView: View {
                 }
                     .padding(.horizontal, 18)
                     .padding(.top, 18)
-                    .padding(.bottom, 20)
+                    .padding(.bottom, model.selectedPage == .capture ? 2 : 20)
                     .transition(
                         .scale(scale: 0.8, anchor: .top)
                             .combined(with: .opacity)
@@ -137,7 +137,7 @@ struct NotchView: View {
             .horizontal,
             model.isOpen ? 12 : bottomCornerRadius
         )
-        .padding(.bottom, model.isOpen ? 12 : 0)
+        .padding(.bottom, model.isOpen && model.selectedPage != .capture ? 12 : 0)
         .animation(NotchAnimationModel.contentAnimation, value: model.isOpen)
     }
 

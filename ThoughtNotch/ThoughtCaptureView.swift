@@ -9,7 +9,7 @@ struct ThoughtCaptureView: View {
     @State private var text = ""
 
     var body: some View {
-        VStack(spacing: 10) {
+        ZStack(alignment: .bottom) {
             CaptureTextView(
                 text: $text,
                 placeholder: "What is on your mind?",
@@ -18,19 +18,27 @@ struct ThoughtCaptureView: View {
                 onPageDelta: onPageDelta
             )
             .frame(height: 86)
+            .frame(maxHeight: .infinity, alignment: .top)
 
             HStack {
-                Text("cmd+enter saves")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.44))
+                ShortcutKeyGroup(
+                    icons: ["command", "return"],
+                    label: "Save",
+                    accessibilityLabel: "Command Return saves"
+                )
 
                 Spacer()
 
-                Text("esc closes")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.36))
+                ShortcutKeyGroup(
+                    icons: ["escape"],
+                    label: "Close",
+                    accessibilityLabel: "Escape closes"
+                )
             }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 8)
         }
+        .frame(height: 144, alignment: .top)
     }
 
     private func save() {
@@ -43,6 +51,46 @@ struct ThoughtCaptureView: View {
 
         onSave(trimmedText)
         text = ""
+    }
+}
+
+private struct ShortcutKeyGroup: View {
+    let icons: [String]
+    let label: String
+    let accessibilityLabel: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            ForEach(icons, id: \.self) { icon in
+                ShortcutKeyIcon(systemName: icon)
+            }
+
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.42))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+private struct ShortcutKeyIcon: View {
+    let systemName: String
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: 10, weight: .semibold))
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(.white.opacity(0.58))
+            .frame(width: 22, height: 18)
+            .background {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(.white.opacity(0.08))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(.white.opacity(0.12), lineWidth: 0.75)
+                    }
+            }
     }
 }
 
