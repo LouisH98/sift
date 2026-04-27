@@ -9,7 +9,13 @@ struct ThoughtProcessingOutput: Decodable {
 
     let title: String
     let distilled: String
+    let classification: String
     let tags: [String]
+    let pageId: String
+    let pageParentId: String
+    let pageTitle: String
+    let pageSummary: String
+    let pageBodyMarkdown: String
     let themeTitle: String
     let themeSummary: String
     let linkedThoughtIds: [String]
@@ -68,6 +74,28 @@ struct OpenAIClient {
 
         let outputText = try outputText(from: data)
         return try JSONDecoder().decode(ThoughtProcessingOutput.self, from: Data(outputText.utf8))
+    }
+
+    func reorganize(input: ThoughtReorganizationInput) async throws -> ReorganizationProposal {
+        let payload = try makeReorganizationPayload(input: input)
+        var request = authenticatedRequest(url: try endpointURL(path: "responses"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 90
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OpenAIClientError.invalidResponse
+        }
+
+        guard 200..<300 ~= httpResponse.statusCode else {
+            throw OpenAIClientError.apiError(apiErrorMessage(from: data) ?? "OpenAI reorganization request failed with status \(httpResponse.statusCode).")
+        }
+
+        let outputText = try outputText(from: data)
+        let output = try JSONDecoder().decode(ReorganizationClientOutput.self, from: Data(outputText.utf8))
+        return output.proposal
     }
 
     func availableModels() async throws -> [String] {
@@ -133,7 +161,7 @@ struct OpenAIClient {
                 [
                     "role": "system",
                     "content": """
-                    You organize a private thought-capture notebook. Keep raw meaning intact, derive concise metadata, and only create action items for explicit or strongly implied actions. Return JSON that exactly matches the schema.
+                    You organize a private thought-capture notebook. Keep raw meaning intact, route thoughts into a hierarchical page tree, and only create action items for explicit or strongly implied actions. Return JSON that exactly matches the schema.
                     """
                 ],
                 [
@@ -146,7 +174,33 @@ struct OpenAIClient {
                     "type": "json_schema",
                     "name": "thought_distillation",
                     "strict": true,
-                    "schema": Self.schema
+                    "schema": Self.processingSchema
+                ]
+            ]
+        ]
+    }
+
+    private func makeReorganizationPayload(input: ThoughtReorganizationInput) throws -> [String: Any] {
+        [
+            "model": settings.modelID.trimmingCharacters(in: .whitespacesAndNewlines),
+            "input": [
+                [
+                    "role": "system",
+                    "content": """
+                    You reorganize a private thought notebook. Preserve every raw thought ID, propose a clear hierarchical page tree, and produce concise Notion-style page summaries and body markdown. Return JSON that exactly matches the schema.
+                    """
+                ],
+                [
+                    "role": "user",
+                    "content": input.prompt
+                ]
+            ],
+            "text": [
+                "format": [
+                    "type": "json_schema",
+                    "name": "thought_reorganization",
+                    "strict": true,
+                    "schema": Self.reorganizationSchema
                 ]
             ]
         ]
@@ -208,13 +262,55 @@ struct OpenAIClient {
         let data: [Model]
     }
 
-    private static let schema: [String: Any] = [
+    private struct ReorganizationClientOutput: Decodable {
+        struct Page: Decodable {
+            let id: String
+            let existingPageId: String
+            let parentId: String
+            let title: String
+            let summary: String
+            let bodyMarkdown: String
+            let tags: [String]
+            let thoughtIds: [String]
+        }
+
+        let notes: [String]
+        let deletedPageIds: [String]
+        let pages: [Page]
+
+        var proposal: ReorganizationProposal {
+            ReorganizationProposal(
+                notes: notes,
+                deletedPageIDs: deletedPageIds.compactMap(UUID.init(uuidString:)),
+                pages: pages.map { page in
+                    ProposedThoughtPage(
+                        id: page.id,
+                        existingPageID: UUID(uuidString: page.existingPageId),
+                        parentID: page.parentId.isEmpty ? nil : page.parentId,
+                        title: page.title,
+                        summary: page.summary,
+                        bodyMarkdown: page.bodyMarkdown,
+                        tags: page.tags,
+                        thoughtIDs: page.thoughtIds.compactMap(UUID.init(uuidString:))
+                    )
+                }
+            )
+        }
+    }
+
+    private static let processingSchema: [String: Any] = [
         "type": "object",
         "additionalProperties": false,
         "required": [
             "title",
             "distilled",
+            "classification",
             "tags",
+            "pageId",
+            "pageParentId",
+            "pageTitle",
+            "pageSummary",
+            "pageBodyMarkdown",
             "themeTitle",
             "themeSummary",
             "linkedThoughtIds",
@@ -232,17 +328,42 @@ struct OpenAIClient {
                 "type": "string",
                 "description": "Cleaned-up version of the thought, preserving meaning."
             ],
+            "classification": [
+                "type": "string",
+                "enum": ["todo", "notebook", "both"],
+                "description": "Whether the thought is action-only, notebook-only, or both."
+            ],
             "tags": [
                 "type": "array",
                 "items": ["type": "string"]
             ],
+            "pageId": [
+                "type": "string",
+                "description": "Existing page UUID if the thought belongs to one; empty string for a new page."
+            ],
+            "pageParentId": [
+                "type": "string",
+                "description": "Existing parent page UUID for a new or moved page; empty string for top level."
+            ],
+            "pageTitle": [
+                "type": "string",
+                "description": "Best matching page title, existing or new."
+            ],
+            "pageSummary": [
+                "type": "string",
+                "description": "Updated concise summary for the page."
+            ],
+            "pageBodyMarkdown": [
+                "type": "string",
+                "description": "Notion-style markdown body for the page, synthesized from linked raw thoughts."
+            ],
             "themeTitle": [
                 "type": "string",
-                "description": "Best matching rolling theme title, existing or new."
+                "description": "Compatibility field. Match pageTitle."
             ],
             "themeSummary": [
                 "type": "string",
-                "description": "Updated summary for the theme."
+                "description": "Compatibility field. Match pageSummary."
             ],
             "linkedThoughtIds": [
                 "type": "array",
@@ -271,6 +392,65 @@ struct OpenAIClient {
                         "dueAt": [
                             "type": "string",
                             "description": "ISO-8601 date if explicitly inferable, otherwise empty string."
+                        ]
+                    ]
+                ]
+            ]
+        ]
+    ]
+
+    private static let reorganizationSchema: [String: Any] = [
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["notes", "deletedPageIds", "pages"],
+        "properties": [
+            "notes": [
+                "type": "array",
+                "items": ["type": "string"]
+            ],
+            "deletedPageIds": [
+                "type": "array",
+                "items": ["type": "string"],
+                "description": "Existing page UUIDs that should be deleted because they are replaced by the proposed structure."
+            ],
+            "pages": [
+                "type": "array",
+                "items": [
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "id",
+                        "existingPageId",
+                        "parentId",
+                        "title",
+                        "summary",
+                        "bodyMarkdown",
+                        "tags",
+                        "thoughtIds"
+                    ],
+                    "properties": [
+                        "id": [
+                            "type": "string",
+                            "description": "Use an existing page UUID, or a stable temporary id like new-product-strategy."
+                        ],
+                        "existingPageId": [
+                            "type": "string",
+                            "description": "Existing page UUID when retaining/renaming a page; empty string for new pages."
+                        ],
+                        "parentId": [
+                            "type": "string",
+                            "description": "Parent proposed id or existing UUID; empty string for top-level pages."
+                        ],
+                        "title": ["type": "string"],
+                        "summary": ["type": "string"],
+                        "bodyMarkdown": ["type": "string"],
+                        "tags": [
+                            "type": "array",
+                            "items": ["type": "string"]
+                        ],
+                        "thoughtIds": [
+                            "type": "array",
+                            "items": ["type": "string"]
                         ]
                     ]
                 ]

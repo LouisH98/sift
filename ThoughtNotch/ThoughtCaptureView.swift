@@ -72,6 +72,7 @@ private struct CaptureTextView: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 0, height: 4)
         textView.textContainer?.lineFragmentPadding = 0
         textView.placeholderString = placeholder
+        textView.refreshThemePrefixHighlight()
 
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
@@ -91,6 +92,7 @@ private struct CaptureTextView: NSViewRepresentable {
             textView.string = text
         }
 
+        textView.refreshThemePrefixHighlight()
         textView.onSave = onSave
         textView.onCancel = onCancel
         textView.onPageDelta = onPageDelta
@@ -119,6 +121,7 @@ private struct CaptureTextView: NSViewRepresentable {
             }
 
             text = textView.string
+            (textView as? CommandTextView)?.refreshThemePrefixHighlight()
             textView.needsDisplay = true
         }
     }
@@ -129,6 +132,40 @@ private final class CommandTextView: NSTextView {
     var onCancel: (() -> Void)?
     var onPageDelta: ((Int) -> Void)?
     var placeholderString: String?
+    private let prefixHighlightAttribute = NSAttributedString.Key("ThoughtNotchThemePrefixHighlight")
+
+    func refreshThemePrefixHighlight() {
+        guard let layoutManager else {
+            return
+        }
+
+        let fullRange = NSRange(location: 0, length: (string as NSString).length)
+        layoutManager.removeTemporaryAttribute(prefixHighlightAttribute, forCharacterRange: fullRange)
+        layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
+        layoutManager.removeTemporaryAttribute(.font, forCharacterRange: fullRange)
+        layoutManager.removeTemporaryAttribute(.shadow, forCharacterRange: fullRange)
+
+        guard let hint = ThoughtPrefixParser.themeHint(in: string) else {
+            return
+        }
+
+        let categoryColor = NSColor.thoughtCategoryColor(hex: ThoughtCategoryColor.hex(for: hint.title))
+        let range = NSRange(location: 0, length: hint.prefixLength)
+        let shadow = NSShadow()
+        shadow.shadowColor = categoryColor.withAlphaComponent(0.75)
+        shadow.shadowBlurRadius = 8
+        shadow.shadowOffset = .zero
+
+        layoutManager.addTemporaryAttributes(
+            [
+                prefixHighlightAttribute: true,
+                .foregroundColor: categoryColor,
+                .font: NSFont.systemFont(ofSize: 18, weight: .semibold),
+                .shadow: shadow
+            ],
+            forCharacterRange: range
+        )
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -174,5 +211,20 @@ private final class CommandTextView: NSTextView {
         }
 
         return super.performKeyEquivalent(with: event)
+    }
+}
+
+private extension NSColor {
+    static func thoughtCategoryColor(hex: String) -> NSColor {
+        let trimmed = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard trimmed.count == 6, let value = Int(trimmed, radix: 16) else {
+            return .controlAccentColor
+        }
+
+        let red = CGFloat((value >> 16) & 0xFF) / 255
+        let green = CGFloat((value >> 8) & 0xFF) / 255
+        let blue = CGFloat(value & 0xFF) / 255
+
+        return NSColor(red: red, green: green, blue: blue, alpha: 1)
     }
 }

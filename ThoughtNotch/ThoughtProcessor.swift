@@ -5,6 +5,10 @@ struct ThoughtProcessingInput {
     let prompt: String
 }
 
+struct ThoughtReorganizationInput {
+    let prompt: String
+}
+
 @MainActor
 final class ThoughtProcessor: ObservableObject {
     static let shared = ThoughtProcessor()
@@ -87,6 +91,9 @@ final class ThoughtProcessor: ObservableObject {
             .map { "- id: \($0.id.uuidString), title: \($0.title), summary: \($0.summary), tags: \($0.tags.joined(separator: ", "))" }
             .joined(separator: "\n")
 
+        let pages = pageContextLines()
+            .joined(separator: "\n")
+
         let existingTags = Array(Set(store.thoughts.flatMap(\.tags)))
             .sorted()
             .prefix(30)
@@ -102,9 +109,13 @@ final class ThoughtProcessor: ObservableObject {
         id: \(thought.id.uuidString)
         createdAt: \(ISO8601DateFormatter().string(from: thought.createdAt))
         raw: \(thought.text)
+        themeHint: \(thought.themeHint ?? "None")
 
         Recent thoughts:
         \(recentThoughts.isEmpty ? "None" : recentThoughts)
+
+        Existing pages:
+        \(pages.isEmpty ? "None" : pages)
 
         Existing themes:
         \(themes.isEmpty ? "None" : themes)
@@ -117,10 +128,15 @@ final class ThoughtProcessor: ObservableObject {
 
         Instructions:
         - Keep the raw thought immutable; only derive metadata.
-        - Prefer an existing theme title when it fits.
+        - Set classification to todo, notebook, or both.
+        - Prefer an existing page when it fits.
+        - If themeHint is not None, strongly prefer a matching page title or create that page.
+        - If no page fits and the thought belongs in the notebook, return an empty pageId and a new pageTitle.
+        - Set compatibility fields themeTitle/themeSummary to match pageTitle/pageSummary.
         - Use linkedThoughtIds only from Recent thoughts.
         - Create actionItems only when the thought implies a concrete task, follow-up, decision, or reminder.
         - Keep action item titles short and imperative.
+        - If classification is todo and there is no reusable notebook context, leave pageId empty but still provide concise page fields.
         """
 
         return ThoughtProcessingInput(prompt: prompt)
@@ -134,15 +150,18 @@ final class ThoughtProcessor: ObservableObject {
     private func apply(_ output: ThoughtProcessingOutput, to originalThought: Thought) {
         let now = Date()
         let linkedThoughtIDs = output.linkedThoughtIds.compactMap(UUID.init(uuidString:))
-        let theme = upsertTheme(from: output, thoughtID: originalThought.id, now: now)
-        let actionItems = makeActionItems(from: output, thoughtID: originalThought.id, themeID: theme.id, now: now)
+        let page = upsertPage(from: output, thoughtID: originalThought.id, originalThought: originalThought, now: now)
+        let theme = upsertTheme(from: output, thoughtID: originalThought.id, page: page, now: now)
+        let actionItems = makeActionItems(from: output, thoughtID: originalThought.id, pageID: page?.id ?? theme.id, now: now)
 
         var thought = originalThought
         thought.title = clean(output.title)
         thought.distilled = clean(output.distilled)
         thought.tags = normalizedTags(output.tags)
-        thought.category = theme.title
-        thought.themeID = theme.id
+        thought.category = page?.title ?? theme.title
+        thought.themeID = page?.id ?? theme.id
+        thought.pageID = page?.id
+        thought.themeHintColorHex = originalThought.themeHint.map { ThoughtCategoryColor.hex(for: $0) } ?? page?.colorHex
         thought.linkedThoughtIDs = linkedThoughtIDs
         thought.processedAt = now
         thought.processingError = nil
@@ -152,12 +171,63 @@ final class ThoughtProcessor: ObservableObject {
         upsertDailyDigest(from: output, thought: thought, actionItems: actionItems, now: now)
     }
 
-    private func upsertTheme(from output: ThoughtProcessingOutput, thoughtID: UUID, now: Date) -> Theme {
-        let title = clean(output.themeTitle).isEmpty ? "Unsorted" : clean(output.themeTitle)
+    private func upsertPage(
+        from output: ThoughtProcessingOutput,
+        thoughtID: UUID,
+        originalThought: Thought,
+        now: Date
+    ) -> ThoughtPage? {
+        let classification = clean(output.classification).lowercased()
+        let shouldAttachToNotebook = classification != "todo" || originalThought.themeHint != nil
+        guard shouldAttachToNotebook else {
+            return nil
+        }
+
+        let explicitPageID = UUID(uuidString: clean(output.pageId))
+        let requestedTitle = clean(output.pageTitle).isEmpty ? clean(output.themeTitle) : clean(output.pageTitle)
+        let hintedTitle = originalThought.themeHint.map(clean) ?? ""
+        let title = !hintedTitle.isEmpty ? hintedTitle : (requestedTitle.isEmpty ? "Unsorted" : requestedTitle)
+
+        let existingPage = explicitPageID.flatMap { store.page(with: $0) }
+            ?? store.pages.first { $0.title.localizedCaseInsensitiveCompare(title) == .orderedSame }
+
+        let parentID = UUID(uuidString: clean(output.pageParentId))
+        var page = existingPage ?? ThoughtPage(
+            id: explicitPageID ?? UUID(),
+            parentID: parentID,
+            title: title,
+            summary: "",
+            bodyMarkdown: "",
+            tags: [],
+            thoughtIDs: [],
+            colorHex: ThoughtCategoryColor.hex(for: title),
+            createdAt: now,
+            updatedAt: now,
+            isStale: false
+        )
+
+        page.parentID = page.id == parentID ? page.parentID : parentID
+        page.title = title
+        page.summary = clean(output.pageSummary).isEmpty ? clean(output.themeSummary) : clean(output.pageSummary)
+        page.bodyMarkdown = clean(output.pageBodyMarkdown).isEmpty ? clean(output.distilled) : clean(output.pageBodyMarkdown)
+        page.tags = Array(Set(page.tags + normalizedTags(output.tags))).sorted()
+        page.colorHex = page.colorHex ?? ThoughtCategoryColor.hex(for: title)
+        if !page.thoughtIDs.contains(thoughtID) {
+            page.thoughtIDs.append(thoughtID)
+        }
+        page.updatedAt = now
+        page.isStale = false
+
+        store.upsertPage(page)
+        return page
+    }
+
+    private func upsertTheme(from output: ThoughtProcessingOutput, thoughtID: UUID, page: ThoughtPage?, now: Date) -> Theme {
+        let title = page?.title ?? (clean(output.themeTitle).isEmpty ? "Unsorted" : clean(output.themeTitle))
         let existingTheme = store.themes.first { $0.title.localizedCaseInsensitiveCompare(title) == .orderedSame }
 
         var theme = existingTheme ?? Theme(
-            id: UUID(),
+            id: page?.id ?? UUID(),
             title: title,
             summary: "",
             tags: [],
@@ -167,9 +237,9 @@ final class ThoughtProcessor: ObservableObject {
         )
 
         theme.title = title
-        theme.summary = clean(output.themeSummary)
+        theme.summary = page?.summary ?? clean(output.themeSummary)
         theme.tags = Array(Set(theme.tags + normalizedTags(output.tags))).sorted()
-        if !theme.thoughtIDs.contains(thoughtID) {
+        if page != nil, !theme.thoughtIDs.contains(thoughtID) {
             theme.thoughtIDs.append(thoughtID)
         }
         theme.updatedAt = now
@@ -181,7 +251,7 @@ final class ThoughtProcessor: ObservableObject {
     private func makeActionItems(
         from output: ThoughtProcessingOutput,
         thoughtID: UUID,
-        themeID: UUID,
+        pageID: UUID,
         now: Date
     ) -> [ActionItem] {
         output.actionItems.compactMap { action in
@@ -194,7 +264,7 @@ final class ThoughtProcessor: ObservableObject {
             return ActionItem(
                 id: UUID(),
                 thoughtID: thoughtID,
-                themeID: themeID,
+                themeID: pageID,
                 title: title,
                 detail: detail.isEmpty ? nil : detail,
                 isDone: false,
@@ -265,6 +335,34 @@ final class ThoughtProcessor: ObservableObject {
         }
 
         return DateFormatter.actionDate.date(from: trimmed)
+    }
+
+    private func pageContextLines() -> [String] {
+        let childrenByParentID = Dictionary(grouping: store.pages, by: \.parentID)
+        let rootPages = (childrenByParentID[nil] ?? [])
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+
+        return rootPages.flatMap { pageLines(for: $0, childrenByParentID: childrenByParentID, depth: 0) }
+    }
+
+    private func pageLines(
+        for page: ThoughtPage,
+        childrenByParentID: [UUID?: [ThoughtPage]],
+        depth: Int
+    ) -> [String] {
+        let indent = String(repeating: "  ", count: depth)
+        var lines = [
+            "\(indent)- id: \(page.id.uuidString), parentId: \(page.parentID?.uuidString ?? "none"), title: \(page.title), summary: \(page.summary), tags: \(page.tags.joined(separator: ", "))"
+        ]
+
+        let children = (childrenByParentID[page.id] ?? [])
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+
+        for child in children {
+            lines.append(contentsOf: pageLines(for: child, childrenByParentID: childrenByParentID, depth: depth + 1))
+        }
+
+        return lines
     }
 }
 

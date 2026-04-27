@@ -81,7 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func openLibrary() {
         if libraryWindowController == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 640, height: 520),
+                contentRect: NSRect(x: 0, y: 0, width: 920, height: 640),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
