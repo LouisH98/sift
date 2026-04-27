@@ -118,12 +118,41 @@ final class ThoughtStore: ObservableObject {
         page.colorHex = page.colorHex ?? ThoughtCategoryColor.hex(for: page.title)
 
         if let index = pages.firstIndex(where: { $0.id == page.id }) {
+            let existingPage = pages[index]
+            if page.synthesisMarkdown == nil {
+                page.synthesisMarkdown = existingPage.synthesisMarkdown
+                page.synthesizedAt = existingPage.synthesizedAt
+                page.synthesisSourceHash = existingPage.synthesisSourceHash
+            }
+
+            if existingPage.title != page.title
+                || existingPage.summary != page.summary
+                || existingPage.bodyMarkdown != page.bodyMarkdown
+                || existingPage.parentID != page.parentID
+                || existingPage.thoughtIDs != page.thoughtIDs {
+                page.isStale = true
+            }
+
             pages[index] = page
         } else {
+            page.isStale = true
             pages.insert(page, at: 0)
         }
 
         pages.sort(by: pageSort)
+        savePages()
+    }
+
+    func updatePageSynthesis(pageID: UUID, synthesisMarkdown: String, sourceHash: String, synthesizedAt: Date = Date()) {
+        guard let index = pages.firstIndex(where: { $0.id == pageID }) else {
+            return
+        }
+
+        pages[index].synthesisMarkdown = synthesisMarkdown
+        pages[index].synthesizedAt = synthesizedAt
+        pages[index].synthesisSourceHash = sourceHash
+        pages[index].isStale = false
+        pages[index].updatedAt = synthesizedAt
         savePages()
     }
 
@@ -138,6 +167,7 @@ final class ThoughtStore: ObservableObject {
 
         pages[index].parentID = parentID
         pages[index].updatedAt = Date()
+        pages[index].isStale = true
         pages.sort(by: pageSort)
         savePages()
     }
@@ -150,6 +180,7 @@ final class ThoughtStore: ObservableObject {
 
         pages[index].title = cleanTitle
         pages[index].updatedAt = Date()
+        pages[index].isStale = true
         savePages()
     }
 
@@ -262,12 +293,15 @@ final class ThoughtStore: ObservableObject {
                 title: title.isEmpty ? "Untitled" : title,
                 summary: proposedPage.summary.trimmingCharacters(in: .whitespacesAndNewlines),
                 bodyMarkdown: proposedPage.bodyMarkdown.trimmingCharacters(in: .whitespacesAndNewlines),
+                synthesisMarkdown: oldPage?.synthesisMarkdown,
+                synthesizedAt: oldPage?.synthesizedAt,
+                synthesisSourceHash: oldPage?.synthesisSourceHash,
                 tags: normalizedTags(proposedPage.tags),
                 thoughtIDs: validThoughtIDs(proposedPage.thoughtIDs),
                 colorHex: oldPage?.colorHex ?? ThoughtCategoryColor.hex(for: title),
                 createdAt: oldPage?.createdAt ?? now,
                 updatedAt: now,
-                isStale: false
+                isStale: true
             )
         }
 
@@ -442,12 +476,15 @@ final class ThoughtStore: ObservableObject {
                 title: theme.title,
                 summary: theme.summary,
                 bodyMarkdown: theme.summary,
+                synthesisMarkdown: nil,
+                synthesizedAt: nil,
+                synthesisSourceHash: nil,
                 tags: theme.tags,
                 thoughtIDs: theme.thoughtIDs,
                 colorHex: ThoughtCategoryColor.hex(for: theme.title),
                 createdAt: theme.createdAt,
                 updatedAt: theme.updatedAt,
-                isStale: false
+                isStale: true
             )
         }
         .sorted(by: pageSort)
@@ -540,6 +577,9 @@ final class ThoughtStore: ObservableObject {
             title: "Unsorted",
             summary: "Thoughts waiting for a better home.",
             bodyMarkdown: "Thoughts waiting for a better home.",
+            synthesisMarkdown: nil,
+            synthesizedAt: nil,
+            synthesisSourceHash: nil,
             tags: [],
             thoughtIDs: [],
             colorHex: ThoughtCategoryColor.hex(for: "Unsorted"),

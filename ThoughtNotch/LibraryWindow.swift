@@ -44,7 +44,10 @@ struct LibraryWindow: View {
             notebookView
         }
         .frame(minWidth: 760, minHeight: 520)
-        .onAppear(perform: ensureSelection)
+        .onAppear {
+            ensureSelection()
+            ThoughtProcessor.shared.synthesizeStalePages()
+        }
         .onChange(of: store.pages.map(\.id)) { _, _ in
             ensureSelection()
         }
@@ -61,6 +64,7 @@ struct LibraryWindow: View {
             Button("Delete", role: .destructive) {
                 if let pendingThoughtDeletion {
                     store.deleteThought(pendingThoughtDeletion.id)
+                    ThoughtProcessor.shared.synthesizeStalePages()
                 }
                 pendingThoughtDeletion = nil
             }
@@ -79,6 +83,7 @@ struct LibraryWindow: View {
 
                 selectedThoughtIDs.removeAll()
                 rawSelectionMode = false
+                ThoughtProcessor.shared.synthesizeStalePages()
             }
 
             Button("Cancel", role: .cancel) {}
@@ -89,6 +94,7 @@ struct LibraryWindow: View {
             Button("Delete Page", role: .destructive) {
                 if let pendingPageDeletion {
                     store.deletePage(pendingPageDeletion.id)
+                    ThoughtProcessor.shared.synthesizeStalePages()
                 }
                 pendingPageDeletion = nil
             }
@@ -107,6 +113,7 @@ struct LibraryWindow: View {
                     store.applyReorganizationProposal(proposal)
                     reorganizationProposal = nil
                     ensureSelection()
+                    ThoughtProcessor.shared.synthesizeStalePages()
                 },
                 onCancel: {
                     reorganizationProposal = nil
@@ -574,13 +581,6 @@ private struct PageDetailView: View {
                         .textSelection(.enabled)
                 }
 
-                if !page.bodyMarkdown.isEmpty {
-                    Text(markdownText)
-                        .font(.body)
-                        .lineSpacing(4)
-                        .textSelection(.enabled)
-                }
-
                 if !childPages.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Subpages")
@@ -612,31 +612,48 @@ private struct PageDetailView: View {
                     }
                 }
 
-                Divider()
+                synthesisView
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Raw Ideas")
-                        .font(.headline)
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 18) {
+                        if !page.bodyMarkdown.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Distilled Notes")
+                                    .font(.headline)
 
-                    if thoughts.isEmpty {
-                        Text("No raw thoughts are linked to this page yet.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(thoughts) { thought in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(thought.title ?? thought.text)
-                                    .font(.callout.weight(.medium))
-                                Text(thought.text)
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
-                                Text(thought.createdAt.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
+                                MarkdownDocumentView(markdown: page.bodyMarkdown)
                             }
-                            .padding(.vertical, 6)
+                        }
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Raw Ideas")
+                                .font(.headline)
+
+                            if thoughts.isEmpty {
+                                Text("No raw thoughts are linked to this page yet.")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(thoughts) { thought in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(thought.title ?? thought.text)
+                                            .font(.callout.weight(.medium))
+                                        Text(thought.text)
+                                            .font(.callout)
+                                            .foregroundStyle(.secondary)
+                                            .textSelection(.enabled)
+                                        Text(thought.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                            .font(.caption)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .padding(.vertical, 6)
+                                }
+                            }
                         }
                     }
+                    .padding(.top, 8)
+                } label: {
+                    Label("Peek Under the Hood", systemImage: "chevron.left.forwardslash.chevron.right")
+                        .font(.headline)
                 }
             }
             .padding(28)
@@ -653,12 +670,40 @@ private struct PageDetailView: View {
         }
     }
 
-    private var markdownText: AttributedString {
-        (try? AttributedString(markdown: page.bodyMarkdown)) ?? AttributedString(page.bodyMarkdown)
+    @ViewBuilder
+    private var synthesisView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Synthesis")
+                    .font(.headline)
+
+                if page.isStale {
+                    Label("Updating", systemImage: "sparkles")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                } else if let synthesizedAt = page.synthesizedAt {
+                    Text(synthesizedAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            if let synthesisMarkdown = page.synthesisMarkdown, !synthesisMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                MarkdownDocumentView(markdown: synthesisMarkdown)
+            } else if page.isStale {
+                ProgressView("Synthesizing page")
+                    .controlSize(.small)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Synthesis will appear after AI processing.")
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func commitTitle() {
         store.renamePage(page.id, title: editedTitle)
+        ThoughtProcessor.shared.synthesizeStalePages()
     }
 }
 
@@ -690,6 +735,7 @@ private struct MovePageMenu: View {
         Menu {
             Button("Top Level") {
                 store.movePage(page.id, to: nil)
+                ThoughtProcessor.shared.synthesizeStalePages()
             }
 
             Divider()
@@ -697,6 +743,7 @@ private struct MovePageMenu: View {
             ForEach(validParents) { candidate in
                 Button(candidate.title) {
                     store.movePage(page.id, to: candidate.id)
+                    ThoughtProcessor.shared.synthesizeStalePages()
                 }
             }
         } label: {

@@ -9,6 +9,10 @@ struct ThoughtReorganizationInput {
     let prompt: String
 }
 
+struct ThoughtSynthesisInput {
+    let prompt: String
+}
+
 @MainActor
 final class ThoughtProcessor: ObservableObject {
     static let shared = ThoughtProcessor()
@@ -16,12 +20,14 @@ final class ThoughtProcessor: ObservableObject {
     @Published private(set) var isBackfilling = false
     @Published private(set) var lastError: String?
     @Published private var queuedThoughtIDs: Set<UUID> = []
+    @Published private var queuedPageSynthesisIDs: Set<UUID> = []
 
     private let store: ThoughtStore
     private let settings: AISettings
+    private let synthesisPromptVersion = "synthesis-v2-compact-markdown"
 
     var isProcessing: Bool {
-        isBackfilling || !queuedThoughtIDs.isEmpty
+        isBackfilling || !queuedThoughtIDs.isEmpty || !queuedPageSynthesisIDs.isEmpty
     }
 
     private init() {
@@ -70,12 +76,31 @@ final class ThoughtProcessor: ObservableObject {
         do {
             let input = makeInput(for: thought)
             let output = try await OpenAIClient(settings: settings).process(input: input)
-            apply(output, to: thought)
+            let changedPageID = apply(output, to: thought)
+            if let changedPageID {
+                await synthesizePageAndAncestors(pageID: changedPageID)
+            }
             lastError = nil
         } catch {
             let message = error.localizedDescription
             lastError = message
             store.markProcessingFailed(thoughtID: thoughtID, error: message)
+        }
+    }
+
+    func synthesizeStalePages() {
+        guard settings.canProcess else {
+            return
+        }
+
+        Task { @MainActor in
+            let pages = store.pages
+                .filter(needsSynthesis)
+                .sorted { pageDepth($0) > pageDepth($1) }
+
+            for page in pages {
+                await synthesizePageAndAncestors(pageID: page.id)
+            }
         }
     }
 
@@ -147,7 +172,7 @@ final class ThoughtProcessor: ObservableObject {
         return "- id: \(thought.id.uuidString), title: \(title), tags: \(thought.tags.joined(separator: ", "))"
     }
 
-    private func apply(_ output: ThoughtProcessingOutput, to originalThought: Thought) {
+    private func apply(_ output: ThoughtProcessingOutput, to originalThought: Thought) -> UUID? {
         let now = Date()
         let linkedThoughtIDs = output.linkedThoughtIds.compactMap(UUID.init(uuidString:))
         let page = upsertPage(from: output, thoughtID: originalThought.id, originalThought: originalThought, now: now)
@@ -169,6 +194,7 @@ final class ThoughtProcessor: ObservableObject {
         store.replaceThought(thought)
         store.addActionItems(actionItems)
         upsertDailyDigest(from: output, thought: thought, actionItems: actionItems, now: now)
+        return page?.id
     }
 
     private func upsertPage(
@@ -198,6 +224,9 @@ final class ThoughtProcessor: ObservableObject {
             title: title,
             summary: "",
             bodyMarkdown: "",
+            synthesisMarkdown: nil,
+            synthesizedAt: nil,
+            synthesisSourceHash: nil,
             tags: [],
             thoughtIDs: [],
             colorHex: ThoughtCategoryColor.hex(for: title),
@@ -335,6 +364,133 @@ final class ThoughtProcessor: ObservableObject {
         }
 
         return DateFormatter.actionDate.date(from: trimmed)
+    }
+
+    private func synthesizePageAndAncestors(pageID: UUID) async {
+        var ids: [UUID] = []
+        var currentID: UUID? = pageID
+
+        while let id = currentID {
+            ids.append(id)
+            currentID = store.page(with: id)?.parentID
+        }
+
+        for id in ids {
+            await synthesize(pageID: id)
+        }
+    }
+
+    private func synthesize(pageID: UUID) async {
+        guard settings.canProcess, !queuedPageSynthesisIDs.contains(pageID), let page = store.page(with: pageID) else {
+            return
+        }
+
+        let source = synthesisSource(for: page)
+        let sourceHash = stableHash("\(synthesisPromptVersion)\n\(source)")
+        guard page.synthesisSourceHash != sourceHash || page.isStale || clean(page.synthesisMarkdown ?? "").isEmpty else {
+            return
+        }
+
+        queuedPageSynthesisIDs.insert(pageID)
+        defer {
+            queuedPageSynthesisIDs.remove(pageID)
+        }
+
+        do {
+            let prompt = """
+            Page to synthesize:
+            \(source)
+
+            Instructions:
+            - Write this as the default page view, not as metadata.
+            - Do not merely restate the raw notes; integrate them into a coherent read.
+            - Keep it concise: 80-140 words unless the page genuinely needs more.
+            - Use valid markdown with blank lines between blocks.
+            - Prefer 2-4 short sections using level-2 headings, such as "## What this means", "## Patterns", or "## Open loops".
+            - Use bullets for scan-friendly points. Avoid dense paragraphs.
+            - Call out patterns, tensions, open loops, decisions implied, and emerging subtopics only when present.
+            - Preserve uncertainty. Do not invent facts beyond the provided notes.
+            """
+
+            let output = try await OpenAIClient(settings: settings).synthesizePage(input: ThoughtSynthesisInput(prompt: prompt))
+            store.updatePageSynthesis(
+                pageID: pageID,
+                synthesisMarkdown: clean(output.synthesisMarkdown),
+                sourceHash: sourceHash
+            )
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    private func needsSynthesis(_ page: ThoughtPage) -> Bool {
+        let sourceHash = stableHash("\(synthesisPromptVersion)\n\(synthesisSource(for: page))")
+        return page.isStale || page.synthesisSourceHash != sourceHash || clean(page.synthesisMarkdown ?? "").isEmpty
+    }
+
+    private func synthesisSource(for page: ThoughtPage) -> String {
+        let linkedThoughts = page.thoughtIDs
+            .compactMap(store.thought(with:))
+            .sorted { $0.createdAt < $1.createdAt }
+            .map { thought in
+                """
+                - id: \(thought.id.uuidString)
+                  createdAt: \(ISO8601DateFormatter().string(from: thought.createdAt))
+                  title: \(thought.title ?? "")
+                  raw: \(thought.text)
+                  distilled: \(thought.distilled ?? "")
+                  tags: \(thought.tags.joined(separator: ", "))
+                """
+            }
+            .joined(separator: "\n")
+
+        let childPages = store.pages
+            .filter { $0.parentID == page.id }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            .map { child in
+                """
+                - id: \(child.id.uuidString)
+                  title: \(child.title)
+                  summary: \(child.summary)
+                  synthesis: \(child.synthesisMarkdown ?? "")
+                """
+            }
+            .joined(separator: "\n")
+
+        return """
+        id: \(page.id.uuidString)
+        title: \(page.title)
+        summary: \(page.summary)
+        distilledBody:
+        \(page.bodyMarkdown)
+
+        childPages:
+        \(childPages.isEmpty ? "None" : childPages)
+
+        linkedRawThoughts:
+        \(linkedThoughts.isEmpty ? "None" : linkedThoughts)
+        """
+    }
+
+    private func stableHash(_ value: String) -> String {
+        let hash = value.unicodeScalars.reduce(UInt64(14695981039346656037)) { partial, scalar in
+            (partial ^ UInt64(scalar.value)) &* 1099511628211
+        }
+
+        return String(hash, radix: 16)
+    }
+
+    private func pageDepth(_ page: ThoughtPage) -> Int {
+        var depth = 0
+        var parentID = page.parentID
+
+        while let id = parentID, let parent = store.page(with: id) {
+            depth += 1
+            parentID = parent.parentID
+        }
+
+        return depth
     }
 
     private func pageContextLines() -> [String] {

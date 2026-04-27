@@ -58,6 +58,9 @@ struct ThoughtPage: Codable, Identifiable, Hashable {
     var title: String
     var summary: String
     var bodyMarkdown: String
+    var synthesisMarkdown: String?
+    var synthesizedAt: Date?
+    var synthesisSourceHash: String?
     var tags: [String]
     var thoughtIDs: [UUID]
     var colorHex: String?

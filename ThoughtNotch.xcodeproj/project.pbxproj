@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		B1DE41472F9F6AA0007A9FC8 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = B1DE41462F9F6AA0007A9FC8 /* KeyboardShortcuts */; };
+		B1DE414A2F9F7B24007A9FC8 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B1DE41492F9F7B24007A9FC8 /* Markdown */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B1DE41472F9F6AA0007A9FC8 /* KeyboardShortcuts in Frameworks */,
+				B1DE414A2F9F7B24007A9FC8 /* Markdown in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,6 +73,7 @@
 			name = ThoughtNotch;
 			packageProductDependencies = (
 				B1DE41462F9F6AA0007A9FC8 /* KeyboardShortcuts */,
+				B1DE41492F9F7B24007A9FC8 /* Markdown */,
 			);
 			productName = ThoughtNotch;
 			productReference = B1DE41362F9F61AC007A9FC8 /* ThoughtNotch.app */;
@@ -102,6 +105,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				B1DE41452F9F6AA0007A9FC8 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
+				B1DE41482F9F7B24007A9FC8 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B1DE41372F9F61AC007A9FC8 /* Products */;
@@ -255,8 +259,8 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -286,8 +290,8 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -342,6 +346,14 @@
 				minimumVersion = 2.4.0;
 			};
 		};
+		B1DE41482F9F7B24007A9FC8 /* XCRemoteSwiftPackageReference "swift-markdown" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swiftlang/swift-markdown.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.7.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -349,6 +361,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B1DE41452F9F6AA0007A9FC8 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */;
 			productName = KeyboardShortcuts;
+		};
+		B1DE41492F9F7B24007A9FC8 /* Markdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B1DE41482F9F7B24007A9FC8 /* XCRemoteSwiftPackageReference "swift-markdown" */;
+			productName = Markdown;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

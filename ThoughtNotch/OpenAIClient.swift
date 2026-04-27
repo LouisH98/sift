@@ -25,6 +25,10 @@ struct ThoughtProcessingOutput: Decodable {
     let actionItems: [Action]
 }
 
+struct ThoughtSynthesisOutput: Decodable {
+    let synthesisMarkdown: String
+}
+
 enum OpenAIClientError: LocalizedError {
     case invalidBaseURL
     case invalidResponse
@@ -96,6 +100,27 @@ struct OpenAIClient {
         let outputText = try outputText(from: data)
         let output = try JSONDecoder().decode(ReorganizationClientOutput.self, from: Data(outputText.utf8))
         return output.proposal
+    }
+
+    func synthesizePage(input: ThoughtSynthesisInput) async throws -> ThoughtSynthesisOutput {
+        let payload = try makeSynthesisPayload(input: input)
+        var request = authenticatedRequest(url: try endpointURL(path: "responses"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 90
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OpenAIClientError.invalidResponse
+        }
+
+        guard 200..<300 ~= httpResponse.statusCode else {
+            throw OpenAIClientError.apiError(apiErrorMessage(from: data) ?? "OpenAI synthesis request failed with status \(httpResponse.statusCode).")
+        }
+
+        let outputText = try outputText(from: data)
+        return try JSONDecoder().decode(ThoughtSynthesisOutput.self, from: Data(outputText.utf8))
     }
 
     func availableModels() async throws -> [String] {
@@ -201,6 +226,32 @@ struct OpenAIClient {
                     "name": "thought_reorganization",
                     "strict": true,
                     "schema": Self.reorganizationSchema
+                ]
+            ]
+        ]
+    }
+
+    private func makeSynthesisPayload(input: ThoughtSynthesisInput) throws -> [String: Any] {
+        [
+            "model": settings.modelID.trimmingCharacters(in: .whitespacesAndNewlines),
+            "input": [
+                [
+                    "role": "system",
+                    "content": """
+                    You synthesize a private notebook page. Write concise, valid markdown with clear block structure and blank lines between headings, paragraphs, and lists. Surface patterns, tensions, open loops, decisions, and emerging structure without becoming wordy. Return JSON that exactly matches the schema.
+                    """
+                ],
+                [
+                    "role": "user",
+                    "content": input.prompt
+                ]
+            ],
+            "text": [
+                "format": [
+                    "type": "json_schema",
+                    "name": "thought_page_synthesis",
+                    "strict": true,
+                    "schema": Self.synthesisSchema
                 ]
             ]
         ]
@@ -454,6 +505,18 @@ struct OpenAIClient {
                         ]
                     ]
                 ]
+            ]
+        ]
+    ]
+
+    private static let synthesisSchema: [String: Any] = [
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["synthesisMarkdown"],
+        "properties": [
+            "synthesisMarkdown": [
+                "type": "string",
+                "description": "The default markdown view for the page. Use concise markdown, 80-140 words by default, with blank lines between blocks and 2-4 short sections or bullet groups."
             ]
         ]
     ]
