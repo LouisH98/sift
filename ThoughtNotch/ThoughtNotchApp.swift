@@ -4,6 +4,8 @@ import SwiftUI
 @main
 struct ThoughtNotchApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @StateObject private var store = ThoughtStore.shared
+    @StateObject private var processor = ThoughtProcessor.shared
 
     var body: some Scene {
         MenuBarExtra {
@@ -25,9 +27,74 @@ struct ThoughtNotchApp: App {
                 NSApp.terminate(nil)
             }
         } label: {
-            Image(systemName: "sparkles")
-                .symbolRenderingMode(.monochrome)
-                .accessibilityLabel("ThoughtNotch")
+            MenuBarStatusLabel(
+                isProcessing: processor.isProcessing,
+                hasError: processor.lastError != nil,
+                todoCount: store.openActionItems.count
+            )
         }
+    }
+}
+
+private struct MenuBarStatusLabel: View {
+    let isProcessing: Bool
+    let hasError: Bool
+    let todoCount: Int
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "sparkles")
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(statusColor)
+
+            if hasError {
+                Text("!")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+            } else if isProcessing {
+                Text("...")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+            }
+
+            if todoCount > 0 {
+                Image(systemName: "checklist")
+                    .font(.system(size: 10, weight: .medium))
+
+                Text(compactTodoCount)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilitySummary)
+        .help(accessibilitySummary)
+    }
+
+    private var statusColor: Color {
+        if hasError {
+            return .red
+        }
+
+        if isProcessing {
+            return .yellow
+        }
+
+        return .primary
+    }
+
+    private var compactTodoCount: String {
+        todoCount > 99 ? "99+" : "\(todoCount)"
+    }
+
+    private var accessibilitySummary: String {
+        let status: String
+        if hasError {
+            status = "OpenAI API connection error"
+        } else if isProcessing {
+            status = "Processing thoughts"
+        } else {
+            status = "ThoughtNotch idle"
+        }
+
+        return "\(status). \(todoCount) todos."
     }
 }

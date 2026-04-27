@@ -11,10 +11,14 @@ final class ThoughtProcessor: ObservableObject {
 
     @Published private(set) var isBackfilling = false
     @Published private(set) var lastError: String?
+    @Published private var queuedThoughtIDs: Set<UUID> = []
 
     private let store: ThoughtStore
     private let settings: AISettings
-    private var queuedThoughtIDs: Set<UUID> = []
+
+    var isProcessing: Bool {
+        isBackfilling || !queuedThoughtIDs.isEmpty
+    }
 
     private init() {
         store = .shared
