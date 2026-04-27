@@ -1,4 +1,5 @@
 import KeyboardShortcuts
+import ServiceManagement
 import SwiftUI
 
 struct SettingsView: View {
@@ -8,11 +9,30 @@ struct SettingsView: View {
     @State private var availableModels: [String] = []
     @State private var isLoadingModels = false
     @State private var modelLoadError: String?
+    @State private var launchAtLoginStatus = SMAppService.mainApp.status
+    @State private var launchAtLoginError: String?
 
     var body: some View {
         Form {
             Section("Capture") {
                 KeyboardShortcuts.Recorder("Toggle notch:", name: .toggleNotch)
+            }
+
+            Section("Startup") {
+                Toggle("Open ThoughtNotch at login", isOn: Binding(
+                    get: { launchAtLoginStatus == .enabled },
+                    set: setLaunchAtLogin
+                ))
+
+                if launchAtLoginStatus == .requiresApproval {
+                    Text("Approve ThoughtNotch in System Settings > General > Login Items.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let launchAtLoginError {
+                    Text(launchAtLoginError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
 
             Section("AI Processing") {
@@ -50,6 +70,9 @@ struct SettingsView: View {
         .frame(width: 460)
         .task {
             await loadModelsIfNeeded()
+        }
+        .onAppear {
+            refreshLaunchAtLogin()
         }
     }
 
@@ -130,5 +153,25 @@ struct SettingsView: View {
         }
 
         isLoadingModels = false
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+
+            launchAtLoginError = nil
+        } catch {
+            launchAtLoginError = "Could not update login item. Try again after installing the app."
+        }
+
+        refreshLaunchAtLogin()
+    }
+
+    private func refreshLaunchAtLogin() {
+        launchAtLoginStatus = SMAppService.mainApp.status
     }
 }
