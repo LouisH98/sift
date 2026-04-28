@@ -6,6 +6,7 @@ import SwiftUI
 final class ActionListNavigationModel: ObservableObject {
     @Published var selectedActionID: UUID?
     @Published var completingActionIDs = Set<UUID>()
+    @Published var selectedActionScrollRequest = 0
 
     func ensureSelection(in items: [ActionItem]) {
         let ids = items.map(\.id)
@@ -33,6 +34,23 @@ final class ActionListNavigationModel: ObservableObject {
         let currentIndex = selectedActionID.flatMap { ids.firstIndex(of: $0) } ?? 0
         let nextIndex = min(max(currentIndex + delta, 0), ids.count - 1)
         selectedActionID = ids[nextIndex]
+    }
+
+    func moveSelectedPriority(_ delta: Int, store: ThoughtStore) {
+        guard
+            let selectedActionID,
+            store.openActionItems.contains(where: { $0.id == selectedActionID })
+        else {
+            return
+        }
+
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+            let didMove = store.moveOpenActionItem(selectedActionID, delta: delta)
+            self.selectedActionID = selectedActionID
+            if didMove {
+                self.selectedActionScrollRequest += 1
+            }
+        }
     }
 
     func toggleSelected(in items: [ActionItem], store: ThoughtStore) {
@@ -179,13 +197,10 @@ struct ActionChecklistView: View {
                             .animation(.spring(response: 0.34, dampingFraction: 0.82), value: actionRows)
                             .animation(.spring(response: 0.28, dampingFraction: 0.78), value: navigationModel.selectedActionID)
                             .onChange(of: navigationModel.selectedActionID) { _, id in
-                                guard let id else {
-                                    return
-                                }
-
-                                withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-                                    proxy.scrollTo(id, anchor: .center)
-                                }
+                                scrollToSelectedAction(id, with: proxy)
+                            }
+                            .onChange(of: navigationModel.selectedActionScrollRequest) { _, _ in
+                                scrollToSelectedAction(navigationModel.selectedActionID, with: proxy)
                             }
                         }
                     }
@@ -197,6 +212,7 @@ struct ActionChecklistView: View {
         .background(
             ActionKeyboardCatcher(
                 onMove: { navigationModel.moveSelection($0, in: visibleActionItems) },
+                onReorder: { navigationModel.moveSelectedPriority($0, store: store) },
                 onToggle: { navigationModel.toggleSelected(in: visibleActionItems, store: store) },
                 onCancel: onCancel
             )
@@ -210,6 +226,18 @@ struct ActionChecklistView: View {
         }
         .onChange(of: visibleActionItems.map(\.id)) { _, _ in
             navigationModel.ensureSelection(in: visibleActionItems)
+        }
+    }
+
+    private func scrollToSelectedAction(_ id: UUID?, with proxy: ScrollViewProxy) {
+        guard let id else {
+            return
+        }
+
+        DispatchQueue.main.async {
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                proxy.scrollTo(id, anchor: .center)
+            }
         }
     }
 }
@@ -434,6 +462,7 @@ private extension DateFormatter {
 
 private struct ActionKeyboardCatcher: NSViewRepresentable {
     let onMove: (Int) -> Void
+    let onReorder: (Int) -> Void
     let onToggle: () -> Void
     let onCancel: () -> Void
 
@@ -441,6 +470,7 @@ private struct ActionKeyboardCatcher: NSViewRepresentable {
         let view = ActionKeyView()
         view.identifier = .siftActionKeyboardCatcher
         view.onMove = onMove
+        view.onReorder = onReorder
         view.onToggle = onToggle
         view.onCancel = onCancel
         return view
@@ -448,6 +478,7 @@ private struct ActionKeyboardCatcher: NSViewRepresentable {
 
     func updateNSView(_ view: ActionKeyView, context: Context) {
         view.onMove = onMove
+        view.onReorder = onReorder
         view.onToggle = onToggle
         view.onCancel = onCancel
 
@@ -462,6 +493,7 @@ private struct ActionKeyboardCatcher: NSViewRepresentable {
 
     final class ActionKeyView: NSView {
         var onMove: ((Int) -> Void)?
+        var onReorder: ((Int) -> Void)?
         var onToggle: (() -> Void)?
         var onCancel: (() -> Void)?
 
@@ -470,6 +502,37 @@ private struct ActionKeyboardCatcher: NSViewRepresentable {
         }
 
         override func keyDown(with event: NSEvent) {
+            if handle(event) {
+                return
+            }
+
+            super.keyDown(with: event)
+        }
+
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            handle(event) || super.performKeyEquivalent(with: event)
+        }
+
+        private func handle(_ event: NSEvent) -> Bool {
+            let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+
+            if modifiers == .command {
+                switch event.keyCode {
+                case 126:
+                    onReorder?(-1)
+                case 125:
+                    onReorder?(1)
+                default:
+                    return false
+                }
+
+                return true
+            }
+
+            guard modifiers.isEmpty else {
+                return false
+            }
+
             switch event.keyCode {
             case 126:
                 onMove?(-1)
@@ -480,8 +543,10 @@ private struct ActionKeyboardCatcher: NSViewRepresentable {
             case 53:
                 onCancel?()
             default:
-                super.keyDown(with: event)
+                return false
             }
+
+            return true
         }
     }
 }

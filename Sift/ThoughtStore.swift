@@ -389,13 +389,45 @@ final class ThoughtStore: ObservableObject {
             return
         }
 
-        for item in items where !actionItems.contains(where: { $0.id == item.id }) {
-            actionItems.insert(item, at: 0)
+        var nextActionItems = actionItems
+        let shouldAssignManualPriority = nextActionItems.contains { !$0.isDone && $0.priority != nil }
+        var nextPriority = nextOpenActionPriority(in: nextActionItems)
+
+        for var item in items where !nextActionItems.contains(where: { $0.id == item.id }) {
+            if shouldAssignManualPriority, !item.isDone, item.priority == nil {
+                item.priority = nextPriority
+                nextPriority += 1
+            }
+
+            nextActionItems.insert(item, at: 0)
         }
 
+        actionItems = nextActionItems
         actionItems.sort(by: actionItemSort)
         saveActionItems()
         ActionReminderScheduler.shared.sync(actionItems: items, settings: TodoSettings.shared)
+    }
+
+    @discardableResult
+    func moveOpenActionItem(_ id: UUID, delta: Int) -> Bool {
+        var reorderedOpenItems = openActionItems
+        guard
+            let currentIndex = reorderedOpenItems.firstIndex(where: { $0.id == id }),
+            delta != 0
+        else {
+            return false
+        }
+
+        let nextIndex = min(max(currentIndex + delta, 0), reorderedOpenItems.count - 1)
+        guard nextIndex != currentIndex else {
+            return false
+        }
+
+        let item = reorderedOpenItems.remove(at: currentIndex)
+        reorderedOpenItems.insert(item, at: nextIndex)
+
+        applyOpenActionPriorities(reorderedOpenItems)
+        return true
     }
 
     func setActionItemDone(_ id: UUID, isDone: Bool) {
@@ -405,12 +437,17 @@ final class ThoughtStore: ObservableObject {
 
         actionItems[index].isDone = isDone
         actionItems[index].completedAt = isDone ? Date() : nil
+        if !isDone {
+            normalizeOpenActionPrioritiesIfNeeded()
+        }
+
+        actionItems.sort(by: actionItemSort)
         saveActionItems()
 
         if isDone {
             ActionReminderScheduler.shared.cancel(actionItemIDs: [id])
-        } else {
-            ActionReminderScheduler.shared.sync(actionItems: [actionItems[index]], settings: TodoSettings.shared)
+        } else if let restoredItem = actionItems.first(where: { $0.id == id }) {
+            ActionReminderScheduler.shared.sync(actionItems: [restoredItem], settings: TodoSettings.shared)
         }
     }
 
@@ -695,9 +732,59 @@ final class ThoughtStore: ObservableObject {
 
         return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
     }
+
+    private func applyOpenActionPriorities(_ orderedOpenItems: [ActionItem]) {
+        var nextActionItems = actionItems
+
+        for (priority, item) in orderedOpenItems.enumerated() {
+            guard let index = nextActionItems.firstIndex(where: { $0.id == item.id }) else {
+                continue
+            }
+
+            nextActionItems[index].priority = priority
+        }
+
+        actionItems = nextActionItems.sorted(by: actionItemSort)
+        saveActionItems()
+    }
+
+    private func normalizeOpenActionPrioritiesIfNeeded() {
+        guard actionItems.contains(where: { !$0.isDone && $0.priority != nil }) else {
+            return
+        }
+
+        let orderedOpenItems = openActionItems
+        for (priority, item) in orderedOpenItems.enumerated() {
+            guard let index = actionItems.firstIndex(where: { $0.id == item.id }) else {
+                continue
+            }
+
+            actionItems[index].priority = priority
+        }
+    }
+
+    private func nextOpenActionPriority(in items: [ActionItem]) -> Int {
+        let maximumPriority = items
+            .filter { !$0.isDone }
+            .compactMap(\.priority)
+            .max()
+
+        return maximumPriority.map { $0 + 1 } ?? 0
+    }
 }
 
 private func actionItemSort(_ lhs: ActionItem, _ rhs: ActionItem) -> Bool {
+    switch (lhs.priority, rhs.priority) {
+    case let (lhsPriority?, rhsPriority?) where lhsPriority != rhsPriority:
+        return lhsPriority < rhsPriority
+    case (_?, nil):
+        return true
+    case (nil, _?):
+        return false
+    default:
+        break
+    }
+
     switch (lhs.dueAt, rhs.dueAt) {
     case let (lhsDue?, rhsDue?):
         if lhsDue != rhsDue {

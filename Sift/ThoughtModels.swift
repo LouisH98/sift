@@ -97,6 +97,7 @@ struct ActionItem: Codable, Identifiable, Hashable {
     var title: String
     var detail: String?
     var isDone: Bool
+    var priority: Int? = nil
     var createdAt: Date
     var completedAt: Date?
     var dueAt: Date?

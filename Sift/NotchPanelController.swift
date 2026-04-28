@@ -494,6 +494,19 @@ final class NotchPanelController {
         }
 
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if modifiers == .command {
+            switch event.keyCode {
+            case 126:
+                actionNavigationModel.moveSelectedPriority(-1, store: store)
+            case 125:
+                actionNavigationModel.moveSelectedPriority(1, store: store)
+            default:
+                return false
+            }
+
+            return true
+        }
+
         guard modifiers.isEmpty else {
             return false
         }
