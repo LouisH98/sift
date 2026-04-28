@@ -266,6 +266,19 @@ static float4 topEdgeLineGlowSample(
     float topOffsetInput
 );
 
+static float4 notchGlowSample(
+    float2 position,
+    float2 size,
+    float strength,
+    float time,
+    float3 inputColor,
+    float2 notchSize,
+    float edrGain,
+    float topRadiusInput,
+    float bottomRadiusInput,
+    float topOffsetInput
+);
+
 static float4 topEdgeProcessingSample(
     float2 position,
     float2 size,
@@ -277,57 +290,22 @@ static float4 topEdgeProcessingSample(
     float3 inputColor,
     float edrGain
 ) {
-    float width = size.x;
-    float height = size.y;
-    float3 baseColor = clamp(inputColor, 0.0, 1.0);
-    float3 outputColor = float3(0.0);
-    float outputAlpha = 0.0;
-    float yCenter = height * 0.5;
+    float topRadius = min(5.0, size.y * 0.20);
+    float bottomRadius = min(15.0, size.y * 0.48);
 
-    if (isDistilling > 0.001) {
-        float trackWidth = min(width * 0.68, 250.0);
-        float4 range = processingBounceRange(tracerPhase, 0.24);
-        float segmentWidth = max(22.0, (range.y - range.x) * trackWidth);
-        float segmentLeft = ((width - trackWidth) * 0.5) + (range.x * trackWidth);
-        float segmentRight = segmentLeft + segmentWidth;
-        float segmentCenter = (segmentLeft + segmentRight) * 0.5;
-        float normalizedX = (position.x - segmentCenter) / max(segmentWidth * 0.5, 1.0);
-        float segmentMask = smoothstep(segmentLeft - 0.5, segmentLeft + 2.0, position.x)
-            * (1.0 - smoothstep(segmentRight - 2.0, segmentRight + 0.5, position.x));
-        float gradient = max(0.0, 1.0 - abs(normalizedX));
-        float taper = pow(gradient, 0.62);
-        float coreThickness = mix(0.10, 0.44, taper);
-        float haloY = exp(-pow(abs(position.y - yCenter) / 1.2, 2.0));
-        float coreY = exp(-pow(abs(position.y - yCenter) / coreThickness, 2.0));
-        float colorGlow = gradient * haloY * segmentMask * 0.42 * isDistilling;
-        float colorCore = taper * coreY * segmentMask * 0.52 * isDistilling;
-        float whiteCore = pow(taper, 0.76) * coreY * segmentMask * 0.78 * isDistilling;
-
-        outputColor += baseColor * (colorGlow + colorCore);
-        outputColor += float3(1.0) * whiteCore;
-        outputAlpha = max(outputAlpha, clamp(colorGlow + colorCore + whiteCore, 0.0, 1.0));
-    }
-
-    float completionOpacity = max(0.0, 1.0 - completionProgress);
-    if (completionOpacity > 0.001) {
-        float flashStrength = pow(completionOpacity, 1.18) * 0.72;
-        float2 flashSize = float2(min(width * 0.54, 170.0), 6.2);
-        float4 flash = topEdgeLineGlowSample(
-            position,
-            size,
-            flashStrength,
-            time,
-            inputColor,
-            flashSize,
-            edrGain,
-            0.0
-        );
-
-        outputColor += flash.rgb / max(edrGain, 0.0001);
-        outputAlpha = max(outputAlpha, flash.a);
-    }
-
-    return float4(outputColor * edrGain, clamp(outputAlpha, 0.0, 1.0));
+    return notchProcessingSample(
+        position,
+        size,
+        isDistilling,
+        queuedOpacity,
+        completionProgress,
+        tracerPhase,
+        topRadius,
+        bottomRadius,
+        0.18,
+        inputColor,
+        edrGain
+    );
 }
 
 static float4 topEdgeLineGlowSample(
@@ -344,50 +322,43 @@ static float4 topEdgeLineGlowSample(
         return float4(0.0);
     }
 
-    float lineWidth = clamp(notchSize.x, 96.0, size.x * 0.92);
-    float tabHeight = clamp(notchSize.y * 0.82, 5.0, 30.0);
+    float lineWidth = clamp(notchSize.x, 132.0, size.x * 0.92);
+    float tabHeight = clamp(notchSize.y, 18.0, 34.0);
     float topY = max(0.0, topOffsetInput);
     float centerX = size.x * 0.5;
     float halfLine = lineWidth * 0.5;
-    float lineLeft = centerX - halfLine;
-    float lineRight = centerX + halfLine;
+    float2 virtualNotchSize = float2(lineWidth, tabHeight);
+    float4 notch = notchGlowSample(
+        position,
+        size,
+        strength,
+        time,
+        inputColor,
+        virtualNotchSize,
+        edrGain,
+        5.0,
+        min(15.0, tabHeight * 0.50),
+        topY
+    );
+
     float normalizedX = (position.x - centerX) / max(halfLine, 1.0);
-
-    float2 tabCenter = float2(centerX, topY);
-    float2 tabHalfSize = float2(halfLine, tabHeight);
-    float tabRadius = tabHeight * 0.58;
-    float tabDistance = roundedBoxDistance(position, tabCenter, tabHalfSize, tabRadius);
-    float lineDistance = segmentDistance(position, float2(lineLeft + tabRadius, topY), float2(lineRight - tabRadius, topY));
-    float capSoftness = smoothstep(3.2, -0.9, tabDistance);
-    float horizontalTaper = smoothstep(lineLeft - 42.0, lineLeft + 28.0, position.x)
-        * (1.0 - smoothstep(lineRight - 28.0, lineRight + 42.0, position.x));
-    float downwardMask = smoothstep(topY - 2.0, topY + 1.0, position.y)
-        * (1.0 - smoothstep(topY + tabHeight + 10.0, topY + tabHeight + 128.0, position.y));
-    float breath = 0.96 + (sin(time * 1.55) * 0.04);
-
-    float innerFill = smoothstep(0.72, -0.86, tabDistance) * 0.52;
-    float rimCore = exp(-pow(abs(tabDistance) / 0.58, 2.0)) * capSoftness * 1.36;
-    float bloom = exp(-pow(max(tabDistance, 0.0) / 9.2, 2.0)) * 0.56;
-    float halo = exp(-pow(max(tabDistance, 0.0) / 30.0, 2.0)) * 0.24;
-    float wash = exp(-pow(abs(position.y - (topY + tabHeight)) / 24.0, 2.0))
-        * exp(-pow(abs(normalizedX) / 0.92, 4.0))
-        * 0.38;
-    float lipHighlight = exp(-pow(lineDistance / 0.82, 2.0))
-        * exp(-pow((position.y - topY) / 2.1, 2.0))
-        * 0.68;
-    float energy = (innerFill + rimCore + bloom + halo + wash + lipHighlight) * horizontalTaper * downwardMask * breath;
-    float alpha = clamp(energy * strength, 0.0, 0.82);
-
+    float bottomY = topY + tabHeight;
+    float bottomLip = exp(-pow(abs(position.y - bottomY) / 1.8, 2.0))
+        * exp(-pow(abs(normalizedX) / 0.76, 6.0));
+    float centerLip = exp(-pow(abs(position.y - (bottomY + 1.8)) / 5.2, 2.0))
+        * exp(-pow(abs(normalizedX) / 0.58, 6.0));
+    float centerBloom = exp(-pow(abs(position.y - (bottomY + 8.0)) / 24.0, 2.0))
+        * exp(-pow(abs(normalizedX) / 0.48, 4.0));
+    float sideShoulders = (
+        exp(-pow(length((position - float2(centerX - halfLine, topY + tabHeight * 0.42)) / float2(20.0, 28.0)), 2.0))
+        + exp(-pow(length((position - float2(centerX + halfLine, topY + tabHeight * 0.42)) / float2(20.0, 28.0)), 2.0))
+    );
+    float extraEnergy = ((bottomLip * 0.32) + (centerLip * 0.30) + (centerBloom * 0.24) + (sideShoulders * 0.12)) * strength;
     float3 baseColor = clamp(inputColor, 0.0, 1.0);
-    float3 leftBlue = mix(float3(0.16, 0.34, 1.0), baseColor, 0.18);
-    float3 centerCyan = mix(float3(0.70, 0.96, 1.0), baseColor, 0.12);
-    float3 rightViolet = mix(float3(0.58, 0.26, 1.0), baseColor, 0.12);
-    float3 sideColor = mix(leftBlue, rightViolet, smoothstep(-0.92, 0.92, normalizedX));
-    float3 glowColor = mix(sideColor, centerCyan, clamp(rimCore * 0.54 + innerFill * 0.28 + wash * 0.34, 0.0, 0.88));
-    glowColor = mix(glowColor, float3(1.0), clamp(rimCore * 0.42 + lipHighlight * 0.48, 0.0, 0.72));
-    glowColor *= alpha * edrGain;
+    float centerHeat = clamp((bottomLip * 0.48) + (centerLip * 0.72) + (centerBloom * 0.36), 0.0, 0.82);
+    float3 extraColor = mix(baseColor, float3(1.0), centerHeat) * extraEnergy * edrGain;
 
-    return float4(glowColor, alpha);
+    return float4(notch.rgb + extraColor, max(notch.a, clamp(extraEnergy, 0.0, 0.46)));
 }
 
 static float4 notchGlowSample(
