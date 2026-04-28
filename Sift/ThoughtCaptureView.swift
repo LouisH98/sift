@@ -1,23 +1,44 @@
 import AppKit
 import SwiftUI
 
+private let capturePrefixGlowOutset: CGFloat = 24
+private let captureTodoPrefixColor = NSColor.systemGreen
+
 struct ThoughtCaptureView: View {
     @Binding var text: String
 
+    let textTopInset: CGFloat
     let onSave: (String) -> Void
     let onCancel: () -> Void
     let onPageDelta: (Int) -> Void
+
+    init(
+        text: Binding<String>,
+        textTopInset: CGFloat = 0,
+        onSave: @escaping (String) -> Void,
+        onCancel: @escaping () -> Void,
+        onPageDelta: @escaping (Int) -> Void
+    ) {
+        _text = text
+        self.textTopInset = textTopInset
+        self.onSave = onSave
+        self.onCancel = onCancel
+        self.onPageDelta = onPageDelta
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             CaptureTextView(
                 text: $text,
+                textTopInset: textTopInset,
                 placeholder: "What is on your mind?",
                 onSave: save,
                 onCancel: onCancel,
                 onPageDelta: onPageDelta
             )
-            .frame(height: 86)
+            .offset(x: -capturePrefixGlowOutset)
+            .padding(.trailing, -capturePrefixGlowOutset)
+            .frame(height: 86 + textTopInset, alignment: .top)
             .frame(maxHeight: .infinity, alignment: .top)
 
             HStack {
@@ -38,7 +59,7 @@ struct ThoughtCaptureView: View {
             .padding(.horizontal, 14)
             .padding(.bottom, 8)
         }
-        .frame(height: 144, alignment: .top)
+        .frame(height: 144 + textTopInset, alignment: .top)
     }
 
     private func save() {
@@ -97,6 +118,7 @@ private struct ShortcutKeyIcon: View {
 private struct CaptureTextView: NSViewRepresentable {
     @Binding var text: String
 
+    let textTopInset: CGFloat
     let placeholder: String
     let onSave: () -> Void
     let onCancel: () -> Void
@@ -117,7 +139,7 @@ private struct CaptureTextView: NSViewRepresentable {
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = true
         textView.isAutomaticDashSubstitutionEnabled = true
-        textView.textContainerInset = NSSize(width: 0, height: 4)
+        textView.textContainerInset = NSSize(width: capturePrefixGlowOutset, height: 4 + textTopInset)
         textView.textContainer?.lineFragmentPadding = 0
         textView.placeholderString = placeholder
         textView.refreshThemePrefixHighlight()
@@ -145,6 +167,7 @@ private struct CaptureTextView: NSViewRepresentable {
         textView.onSave = onSave
         textView.onCancel = onCancel
         textView.onPageDelta = onPageDelta
+        textView.textContainerInset = NSSize(width: capturePrefixGlowOutset, height: 4 + textTopInset)
         (scrollView as? CaptureScrollView)?.onPageDelta = onPageDelta
 
         DispatchQueue.main.async {
@@ -254,6 +277,8 @@ private final class CommandTextView: NSTextView {
     var onPageDelta: ((Int) -> Void)?
     var placeholderString: String?
     private let prefixHighlightAttribute = NSAttributedString.Key("SiftThemePrefixHighlight")
+    private let todoPrefixHighlightAttribute = NSAttributedString.Key("SiftTodoPrefixHighlight")
+    private var isNormalizingTodoPrefixSpacing = false
 
     func refreshThemePrefixHighlight() {
         guard let layoutManager else {
@@ -262,33 +287,42 @@ private final class CommandTextView: NSTextView {
 
         let fullRange = NSRange(location: 0, length: (string as NSString).length)
         layoutManager.removeTemporaryAttribute(prefixHighlightAttribute, forCharacterRange: fullRange)
+        layoutManager.removeTemporaryAttribute(todoPrefixHighlightAttribute, forCharacterRange: fullRange)
         layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
         layoutManager.removeTemporaryAttribute(.font, forCharacterRange: fullRange)
-        layoutManager.removeTemporaryAttribute(.shadow, forCharacterRange: fullRange)
 
-        guard let hint = ThoughtPrefixParser.themeHint(in: string) else {
+        if let hint = ThoughtPrefixParser.themeHint(in: string) {
+            let categoryColor = NSColor.thoughtCategoryColor(hex: ThoughtCategoryColor.hex(for: hint.title))
+            let range = NSRange(location: 0, length: hint.prefixLength)
+
+            layoutManager.addTemporaryAttributes(
+                [
+                    prefixHighlightAttribute: true,
+                    .foregroundColor: categoryColor,
+                    .font: NSFont.systemFont(ofSize: 18, weight: .bold)
+                ],
+                forCharacterRange: range
+            )
+        }
+
+        guard let todoHint = ThoughtPrefixParser.todoHint(in: string) else {
             return
         }
 
-        let categoryColor = NSColor.thoughtCategoryColor(hex: ThoughtCategoryColor.hex(for: hint.title))
-        let range = NSRange(location: 0, length: hint.prefixLength)
-        let shadow = NSShadow()
-        shadow.shadowColor = categoryColor.withAlphaComponent(0.75)
-        shadow.shadowBlurRadius = 8
-        shadow.shadowOffset = .zero
-
+        let todoColor = captureTodoPrefixColor
+        let todoRange = NSRange(location: 0, length: todoHint.prefixLength)
         layoutManager.addTemporaryAttributes(
             [
-                prefixHighlightAttribute: true,
-                .foregroundColor: categoryColor,
-                .font: NSFont.systemFont(ofSize: 18, weight: .semibold),
-                .shadow: shadow
+                todoPrefixHighlightAttribute: true,
+                .foregroundColor: todoColor,
+                .font: NSFont.systemFont(ofSize: 18, weight: .bold)
             ],
-            forCharacterRange: range
+            forCharacterRange: todoRange
         )
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        drawPrefixGlow()
         super.draw(dirtyRect)
 
         guard string.isEmpty, let placeholderString else {
@@ -299,9 +333,87 @@ private final class CommandTextView: NSTextView {
             .foregroundColor: NSColor.white.withAlphaComponent(0.34),
             .font: font ?? NSFont.systemFont(ofSize: 18, weight: .regular)
         ]
-        let rect = NSRect(x: 0, y: textContainerInset.height + 1, width: bounds.width, height: 24)
+        let rect = NSRect(
+            x: textContainerInset.width,
+            y: textContainerInset.height + 1,
+            width: bounds.width - textContainerInset.width,
+            height: 24
+        )
 
         placeholderString.draw(in: rect, withAttributes: attributes)
+    }
+
+    private func drawPrefixGlow() {
+        guard let layoutManager, let textContainer, !string.isEmpty else {
+            return
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+
+        for run in prefixGlowRuns() {
+            drawGlow(for: run, layoutManager: layoutManager, textContainer: textContainer)
+        }
+    }
+
+    private func prefixGlowRuns() -> [PrefixGlowRun] {
+        let textLength = (string as NSString).length
+        guard textLength > 0 else {
+            return []
+        }
+
+        var runs: [PrefixGlowRun] = []
+
+        if let hint = ThoughtPrefixParser.themeHint(in: string) {
+            runs.append(
+                PrefixGlowRun(
+                    characterRange: NSRange(location: 0, length: min(hint.prefixLength, textLength)),
+                    color: NSColor.thoughtCategoryColor(hex: ThoughtCategoryColor.hex(for: hint.title)).withAlphaComponent(0.95),
+                    blurRadius: 22
+                )
+            )
+        }
+
+        if let todoHint = ThoughtPrefixParser.todoHint(in: string) {
+            runs.append(
+                PrefixGlowRun(
+                    characterRange: NSRange(location: 0, length: min(todoHint.prefixLength, textLength)),
+                    color: captureTodoPrefixColor.withAlphaComponent(1.0),
+                    blurRadius: 24
+                )
+            )
+        }
+
+        return runs
+    }
+
+    private func drawGlow(for run: PrefixGlowRun, layoutManager: NSLayoutManager, textContainer: NSTextContainer) {
+        guard run.characterRange.length > 0 else {
+            return
+        }
+
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: run.characterRange,
+            actualCharacterRange: nil
+        )
+
+        guard glyphRange.length > 0, let context = NSGraphicsContext.current?.cgContext else {
+            return
+        }
+
+        NSGraphicsContext.saveGraphicsState()
+        context.setShadow(
+            offset: .zero,
+            blur: run.blurRadius,
+            color: run.color.cgColor
+        )
+        layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: textContainerOrigin)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private struct PrefixGlowRun {
+        let characterRange: NSRange
+        let color: NSColor
+        let blurRadius: CGFloat
     }
 
     override func keyDown(with event: NSEvent) {
@@ -323,6 +435,39 @@ private final class CommandTextView: NSTextView {
         }
 
         super.keyDown(with: event)
+    }
+
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        super.insertText(insertString, replacementRange: replacementRange)
+        normalizeTodoPrefixSpacing()
+    }
+
+    private func normalizeTodoPrefixSpacing() {
+        guard !isNormalizingTodoPrefixSpacing else {
+            return
+        }
+
+        let nsString = string as NSString
+        guard nsString.length > 0, nsString.substring(to: 1) == "!" else {
+            return
+        }
+
+        if nsString.length > 1 {
+            let characterAfterPrefix = nsString.substring(with: NSRange(location: 1, length: 1))
+            guard characterAfterPrefix.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else {
+                return
+            }
+        }
+
+        let insertionRange = NSRange(location: 1, length: 0)
+        guard shouldChangeText(in: insertionRange, replacementString: " ") else {
+            return
+        }
+
+        isNormalizingTodoPrefixSpacing = true
+        textStorage?.replaceCharacters(in: insertionRange, with: " ")
+        didChangeText()
+        isNormalizingTodoPrefixSpacing = false
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

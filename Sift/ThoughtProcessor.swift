@@ -248,6 +248,7 @@ final class ThoughtProcessor: ObservableObject {
         createdAt: \(DateFormatter.promptISO8601.string(from: thought.createdAt))
         raw: \(thought.text)
         themeHint: \(thought.themeHint ?? "None")
+        todoDirective: \(ThoughtPrefixParser.todoHint(in: thought.text) == nil ? "None" : "Forced by leading ! prefix")
 
         Current date context:
         now: \(DateFormatter.promptISO8601.string(from: now))
@@ -272,18 +273,21 @@ final class ThoughtProcessor: ObservableObject {
         Instructions:
         - Keep the raw thought immutable; only derive metadata.
         - Set classification to todo, notebook, or both.
+        - If todoDirective is forced by a leading ! prefix, create at least one actionItem and set classification to todo or both.
+        - Treat a leading ! as a capture directive, not as part of action item titles, page titles, summaries, tags, or distilled prose.
         - Prefer an existing page when it fits.
         - If themeHint is not None, strongly prefer a matching page title or create that page.
         - If no page fits and the thought belongs in the notebook, return an empty pageId and a new pageTitle.
         - Set compatibility fields themeTitle/themeSummary to match pageTitle/pageSummary.
         - Use linkedThoughtIds only from Recent thoughts.
-        - Create actionItems only when the thought implies a concrete task, follow-up, decision, or reminder.
+        - Create actionItems only when the thought implies a concrete task, follow-up, decision, reminder, or todoDirective is forced.
         - Keep action item titles short and imperative.
-        - For each action item, set dueAt to an ISO-8601 date-time with timezone when the thought contains an explicit or strongly inferable due date/time.
-        - Resolve relative due phrases like today, tomorrow, Friday, EOD, end of day, tonight, this afternoon, and next week using the current date context and local timezone.
+        - For each action item, set dueDate to YYYY-MM-DD when the thought specifies or strongly implies a due date, including today, tomorrow, Friday, next week, by Friday, or before Friday.
+        - For each action item, set dueTime to 24-hour HH:mm only when the thought contains an explicit time-of-day signal.
+        - Resolve explicit time phrases like at 3pm, 14:30, noon, midnight, EOD, end of day, tonight, this afternoon, and this evening using the current date context and local timezone.
         - Interpret EOD/end of day as 17:00 local time unless the thought gives a different time.
-        - If a due date is inferable but no time is stated, choose the most useful local time for that phrase rather than midnight.
-        - Leave dueAt empty when there is no due date/time signal.
+        - Leave dueTime empty when the thought gives only a date, day, deadline, or relative date without a time.
+        - Never invent a default due time.
         - If classification is todo and there is no reusable notebook context, leave pageId empty but still provide concise page fields.
         """
 
@@ -297,6 +301,7 @@ final class ThoughtProcessor: ObservableObject {
 
     private func apply(_ output: ThoughtProcessingOutput, to originalThought: Thought) -> UUID? {
         let now = Date()
+        let output = normalizedForCaptureDirectives(output, originalThought: originalThought)
         let linkedThoughtIDs = output.linkedThoughtIds.compactMap(UUID.init(uuidString:))
         let page = upsertPage(from: output, thoughtID: originalThought.id, originalThought: originalThought, now: now)
         let theme = upsertTheme(from: output, thoughtID: originalThought.id, page: page, now: now)
@@ -318,6 +323,86 @@ final class ThoughtProcessor: ObservableObject {
         store.addActionItems(actionItems)
         upsertDailyDigest(from: output, thought: thought, actionItems: actionItems, now: now)
         return page?.id
+    }
+
+    private func normalizedForCaptureDirectives(
+        _ output: ThoughtProcessingOutput,
+        originalThought: Thought
+    ) -> ThoughtProcessingOutput {
+        guard ThoughtPrefixParser.todoHint(in: originalThought.text) != nil else {
+            return output
+        }
+
+        let classification = clean(output.classification).lowercased()
+        let forcedClassification = classification == "both" || originalThought.themeHint != nil ? "both" : "todo"
+
+        var actionItems = output.actionItems.compactMap { action -> ThoughtProcessingOutput.Action? in
+            let title = cleanForcedTodoTitle(action.title, originalThought: originalThought)
+            guard !title.isEmpty else {
+                return nil
+            }
+
+            return ThoughtProcessingOutput.Action(
+                title: title,
+                detail: action.detail,
+                dueDate: action.dueDate,
+                dueTime: action.dueTime
+            )
+        }
+
+        if actionItems.isEmpty {
+            let fallbackTitle = cleanForcedTodoTitle("", originalThought: originalThought)
+            if !fallbackTitle.isEmpty {
+                actionItems = [
+                    ThoughtProcessingOutput.Action(
+                        title: fallbackTitle,
+                        detail: "",
+                        dueDate: "",
+                        dueTime: ""
+                    )
+                ]
+            }
+        }
+
+        return ThoughtProcessingOutput(
+            title: output.title,
+            distilled: output.distilled,
+            classification: forcedClassification,
+            tags: output.tags,
+            pageId: output.pageId,
+            pageParentId: output.pageParentId,
+            pageTitle: output.pageTitle,
+            pageSummary: output.pageSummary,
+            pageBodyMarkdown: output.pageBodyMarkdown,
+            themeTitle: output.themeTitle,
+            themeSummary: output.themeSummary,
+            linkedThoughtIds: output.linkedThoughtIds,
+            dailyDigestTitle: output.dailyDigestTitle,
+            dailyDigestSummary: output.dailyDigestSummary,
+            dailyDigestHighlights: output.dailyDigestHighlights,
+            actionItems: actionItems
+        )
+    }
+
+    private func cleanForcedTodoTitle(_ title: String, originalThought: Thought) -> String {
+        let cleanedTitle = clean(title)
+        let rawBody = ThoughtPrefixParser.todoBody(in: originalThought.text)
+        guard !cleanedTitle.isEmpty else {
+            return clean(rawBody)
+        }
+
+        if ThoughtPrefixParser.todoHint(in: cleanedTitle) != nil {
+            let strippedTitle = ThoughtPrefixParser.todoBody(in: cleanedTitle)
+            return clean(strippedTitle).isEmpty ? clean(rawBody) : clean(strippedTitle)
+        }
+
+        if let themeHint = originalThought.themeHint,
+           cleanedTitle.lowercased().hasPrefix("\(themeHint.lowercased()):") {
+            let strippedTitle = ThoughtPrefixParser.todoBody(in: cleanedTitle)
+            return clean(strippedTitle).isEmpty ? clean(rawBody) : clean(strippedTitle)
+        }
+
+        return cleanedTitle
     }
 
     private func upsertPage(
@@ -413,6 +498,8 @@ final class ThoughtProcessor: ObservableObject {
             }
 
             let detail = clean(action.detail)
+            let dueDate = parseActionDueDate(action)
+            let dueTime = parseActionDueTime(action)
             return ActionItem(
                 id: UUID(),
                 thoughtID: thoughtID,
@@ -422,7 +509,8 @@ final class ThoughtProcessor: ObservableObject {
                 isDone: false,
                 createdAt: now,
                 completedAt: nil,
-                dueAt: parseDate(action.dueAt)
+                dueDate: dueDate,
+                dueTime: dueTime
             )
         }
     }
@@ -476,17 +564,21 @@ final class ThoughtProcessor: ObservableObject {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func parseDate(_ value: String) -> Date? {
-        let trimmed = clean(value)
-        guard !trimmed.isEmpty else {
-            return nil
+    private func parseActionDueDate(_ action: ThoughtProcessingOutput.Action) -> Date? {
+        if let date = DateFormatter.actionDate.date(from: clean(action.dueDate)) {
+            return Calendar.current.startOfDay(for: date)
         }
 
-        if let date = ISO8601DateFormatter().date(from: trimmed) {
-            return date
+        return nil
+    }
+
+    private func parseActionDueTime(_ action: ThoughtProcessingOutput.Action) -> String? {
+        let cleanedTime = clean(action.dueTime)
+        if ActionItem.timeComponents(from: cleanedTime) != nil {
+            return cleanedTime
         }
 
-        return DateFormatter.actionDate.date(from: trimmed)
+        return nil
     }
 
     private func synthesizePageAndAncestors(pageID: UUID) async {
@@ -677,4 +769,5 @@ private extension DateFormatter {
         formatter.timeZone = .current
         return formatter
     }()
+
 }

@@ -53,6 +53,9 @@ struct NotchView: View {
     private let visibleStageHeight: CGFloat = 240
     private let openingBlurRadius: CGFloat = 14
     private let contentDismissalBlurRadius: CGFloat = 22
+    private let pageContentTopPadding: CGFloat = 18
+    private let pageChromeHeight: CGFloat = 10
+    private let pageChromeSpacing: CGFloat = 10
 
     private var isNotchedDisplay: Bool {
         !model.hideClosedNotch
@@ -67,6 +70,10 @@ struct NotchView: View {
         let dismissalBlurRadius: CGFloat = model.isContentPresented ? 0 : contentDismissalBlurRadius
 
         return max(presentationBlurRadius, dismissalBlurRadius)
+    }
+
+    private var captureTextTopInset: CGFloat {
+        pageContentTopPadding + pageChromeHeight + pageChromeSpacing
     }
 
     private var currentSize: CGSize {
@@ -204,19 +211,26 @@ struct NotchView: View {
     private var notchBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             if model.isContentMounted {
-                VStack(alignment: .leading, spacing: 10) {
-                    pageChrome
-
-                    Group {
-                        switch model.selectedPage {
-                        case .capture:
+                Group {
+                    switch model.selectedPage {
+                    case .capture:
+                        ZStack(alignment: .topLeading) {
                             ThoughtCaptureView(
                                 text: $model.captureDraft,
+                                textTopInset: captureTextTopInset,
                                 onSave: onSave,
                                 onCancel: onCancel,
                                 onPageDelta: onPageDelta
                             )
-                        case .actions:
+
+                            pageChrome
+                                .padding(.top, pageContentTopPadding)
+                                .zIndex(1)
+                        }
+                    case .actions:
+                        VStack(alignment: .leading, spacing: pageChromeSpacing) {
+                            pageChrome
+
                             ActionChecklistView(
                                 store: store,
                                 navigationModel: actionNavigationModel,
@@ -224,15 +238,15 @@ struct NotchView: View {
                             )
                         }
                     }
-                    .id(model.selectedPage)
-                    .transition(
-                        .scale(scale: 0.92, anchor: .top)
-                            .combined(with: .opacity)
-                            .animation(.smooth(duration: 0.18))
-                    )
                 }
+                .id(model.selectedPage)
+                .transition(
+                    .scale(scale: 0.92, anchor: .top)
+                        .combined(with: .opacity)
+                        .animation(.smooth(duration: 0.18))
+                )
                     .padding(.horizontal, 18)
-                    .padding(.top, 18)
+                    .padding(.top, model.selectedPage == .capture ? 0 : pageContentTopPadding)
                     .padding(.bottom, model.selectedPage == .capture ? 2 : 20)
                     .transition(
                         .scale(scale: 0.8, anchor: .top)
@@ -283,7 +297,7 @@ struct NotchView: View {
                 .help(page.title)
             }
         }
-        .frame(height: 10)
+        .frame(height: pageChromeHeight)
     }
 }
 

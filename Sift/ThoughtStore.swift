@@ -785,7 +785,7 @@ private func actionItemSort(_ lhs: ActionItem, _ rhs: ActionItem) -> Bool {
         break
     }
 
-    switch (lhs.dueAt, rhs.dueAt) {
+    switch (lhs.sortDueAt, rhs.sortDueAt) {
     case let (lhsDue?, rhsDue?):
         if lhsDue != rhsDue {
             return lhsDue < rhsDue
@@ -840,7 +840,7 @@ final class ActionReminderScheduler {
             return
         }
 
-        let schedulableItems = actionItems.filter { !$0.isDone && $0.dueAt != nil }
+        let schedulableItems = actionItems.filter { !$0.isDone && $0.exactDueAt != nil }
         guard !schedulableItems.isEmpty else {
             return
         }
@@ -856,15 +856,15 @@ final class ActionReminderScheduler {
     }
 
     private func schedule(actionItem: ActionItem, leadTimeMinutes: Int) async {
-        guard let dueAt = actionItem.dueAt else {
+        guard let exactDueDate = actionItem.exactDueAt else {
             return
         }
 
         let center = UNUserNotificationCenter.current()
         let identifier = notificationIdentifier(for: actionItem.id)
-        let reminderAt = dueAt.addingTimeInterval(-TimeInterval(leadTimeMinutes * 60))
+        let reminderAt = exactDueDate.addingTimeInterval(-TimeInterval(leadTimeMinutes * 60))
         let now = Date()
-        let content = notificationContent(for: actionItem, dueAt: dueAt)
+        let content = notificationContent(for: actionItem, exactDueDate: exactDueDate)
 
         center.removePendingNotificationRequests(withIdentifiers: [identifier])
 
@@ -872,7 +872,7 @@ final class ActionReminderScheduler {
             await deliverImmediateReminderIfNeeded(
                 identifier: identifier,
                 content: content,
-                dueAt: dueAt,
+                exactDueDate: exactDueDate,
                 now: now,
                 leadTimeMinutes: leadTimeMinutes
             )
@@ -896,12 +896,12 @@ final class ActionReminderScheduler {
     private func deliverImmediateReminderIfNeeded(
         identifier: String,
         content: UNNotificationContent,
-        dueAt: Date,
+        exactDueDate: Date,
         now: Date,
         leadTimeMinutes: Int
     ) async {
         let leadTime = TimeInterval(leadTimeMinutes * 60)
-        guard dueAt.timeIntervalSince(now) <= leadTime else {
+        guard exactDueDate.timeIntervalSince(now) <= leadTime else {
             return
         }
 
@@ -915,9 +915,9 @@ final class ActionReminderScheduler {
         try? await center.add(request)
     }
 
-    private func notificationContent(for actionItem: ActionItem, dueAt: Date) -> UNMutableNotificationContent {
+    private func notificationContent(for actionItem: ActionItem, exactDueDate: Date) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
-        content.title = "TODO due \(DateFormatter.actionReminderDueDate.string(from: dueAt))"
+        content.title = "TODO due \(DateFormatter.actionReminderDueDate.string(from: exactDueDate))"
         content.body = actionItem.title
         content.sound = .default
         content.userInfo = ["actionItemID": actionItem.id.uuidString]

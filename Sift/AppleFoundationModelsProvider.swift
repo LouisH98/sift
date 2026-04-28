@@ -68,7 +68,7 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
     func process(input: ThoughtProcessingInput) async throws -> ThoughtProcessingOutput {
         try ensureAvailable()
         let instructions = """
-        You organize a private thought-capture notebook. Respond in English. Keep meaning intact and prefer notebook classification unless the raw thought is clearly asking someone to do something. Do not create action items for observations, ideas, memories, references, feelings, notes, or general plans. Only set a due date when the raw thought contains an explicit date, explicit time, deadline word, or relative scheduling phrase. Version: \(foundationModelsPromptVersion).
+        You organize a private thought-capture notebook. Respond in English. Keep meaning intact and prefer notebook classification unless the raw thought is clearly asking someone to do something. Do not create action items for observations, ideas, memories, references, feelings, notes, or general plans. Extract date-only due dates separately from explicit due times. Version: \(foundationModelsPromptVersion).
         """
         let prompt = foundationProcessingPrompt(input.prompt)
 
@@ -344,11 +344,13 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
 
         Foundation Models stricter classification rules:
         - Use classification "notebook" by default.
-        - Use classification "todo" or "both" only if raw text includes an imperative task, follow-up, reminder, commitment, or request.
-        - Return actionItems as [] unless the raw text itself contains a concrete task.
+        - Use classification "todo" or "both" only if raw text includes an imperative task, follow-up, reminder, commitment, request, or todoDirective is forced.
+        - Return actionItems as [] unless the raw text itself contains a concrete task or todoDirective is forced.
+        - When todoDirective is forced, treat the leading ! as a capture directive and omit it from titles, summaries, tags, and distilled prose.
         - Do not turn a general idea, note, observation, preference, or plan into an action item.
-        - Set dueAt only if the raw text contains words like today, tomorrow, tonight, EOD, Friday, next week, by, before, due, deadline, at 3pm, or a date.
-        - If there is no due date/time signal in raw text, every action item dueAt must be "".
+        - Set dueDate to YYYY-MM-DD if the raw text specifies or strongly implies a due date, including today, tomorrow, Friday, next week, by Friday, before Friday, due Friday, or a date.
+        - Set dueTime to 24-hour HH:mm only if the raw text contains an explicit time-of-day signal like at 3pm, 14:30, noon, midnight, EOD, end of day, tonight, this afternoon, or this evening.
+        - Never invent a default due time.
         """
     }
 
@@ -384,7 +386,8 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
     private func normalizedProcessingOutput(_ output: ThoughtProcessingOutput, sourcePrompt: String) -> ThoughtProcessingOutput {
         let sourceThought = rawThoughtText(from: sourcePrompt)
         let rawThought = sourceThought.lowercased()
-        let hasTaskSignal = containsAny(
+        let isForcedTodo = forcedTodoDirective(from: sourcePrompt) || ThoughtPrefixParser.todoHint(in: sourceThought) != nil
+        let hasTaskSignal = isForcedTodo || containsAny(
             rawThought,
             [
                 "todo", "to do", "remind", "reminder", "follow up", "follow-up", "ask ", "call ",
@@ -394,32 +397,35 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
                 "put ", "push ", "start ", "turn on ", "switch on ", "washing", "laundry"
             ]
         ) || rawThought.range(of: #"^(put|push|start|turn on|switch on|do|make|take|bring|pick up|drop off|wash|clean)\b"#, options: .regularExpression) != nil
-        let hasDueSignal = containsAny(
+        let hasExplicitTimeSignal = containsAny(
             rawThought,
             [
-                "today", "tomorrow", "tonight", "eod", "end of day", "this afternoon", "this evening",
-                "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-                "next week", "by ", "before ", "due", "deadline", " at "
+                "tonight", "eod", "end of day", "noon", "midnight", "this afternoon", "this evening",
+                " at "
             ]
-        ) || rawThought.range(of: #"\b\d{1,2}(:\d{2})?\s?(am|pm)\b|\b\d{1,2}(:\d{2})\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}/\d{1,2}\b"#, options: .regularExpression) != nil
+        ) || rawThought.range(of: #"\b\d{1,2}(:\d{2})?\s?(am|pm)\b|\b\d{1,2}(:\d{2})\b|\b(at|by|before)\s+\d{1,2}\b"#, options: .regularExpression) != nil
 
         let actionItems: [ThoughtProcessingOutput.Action]
         let classification: String
-        let inferredDueAt = hasDueSignal ? inferredDueAt(from: sourceThought) : nil
+        let actionSourceThought = isForcedTodo ? ThoughtPrefixParser.todoBody(in: sourceThought) : sourceThought
+        let inferredDueDate = hasDueDateSignal(in: rawThought) || hasExplicitTimeSignal ? inferredDueDate(from: sourceThought) : nil
+        let inferredDueTime = hasExplicitTimeSignal ? inferredDueTime(from: sourceThought) : nil
 
         if hasTaskSignal {
             var normalizedActionItems = output.actionItems.map { action in
-                let existingDueAt = clean(action.dueAt)
+                let title = isForcedTodo ? normalizedForcedTodoTitle(action.title, fallback: actionSourceThought) : action.title
                 return ThoughtProcessingOutput.Action(
-                    title: action.title,
+                    title: title,
                     detail: action.detail,
-                    dueAt: hasDueSignal ? (existingDueAt.isEmpty ? inferredDueAt ?? "" : existingDueAt) : ""
+                    dueDate: clean(action.dueDate).isEmpty ? formattedActionDate(inferredDueDate) : action.dueDate,
+                    dueTime: hasExplicitTimeSignal ? (clean(action.dueTime).isEmpty ? inferredDueTime ?? "" : action.dueTime) : ""
                 )
             }.filter { !clean($0.title).isEmpty }
 
             if normalizedActionItems.isEmpty, let fallbackAction = fallbackActionItem(
-                for: sourceThought,
-                inferredDueAt: inferredDueAt
+                for: actionSourceThought,
+                inferredDueDate: inferredDueDate,
+                inferredDueTime: inferredDueTime
             ) {
                 normalizedActionItems = [fallbackAction]
             }
@@ -453,7 +459,11 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
         )
     }
 
-    private func fallbackActionItem(for rawThought: String, inferredDueAt: String?) -> ThoughtProcessingOutput.Action? {
+    private func fallbackActionItem(
+        for rawThought: String,
+        inferredDueDate: Date?,
+        inferredDueTime: String?
+    ) -> ThoughtProcessingOutput.Action? {
         let title = actionTitle(from: rawThought)
         guard !title.isEmpty else {
             return nil
@@ -462,7 +472,8 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
         return ThoughtProcessingOutput.Action(
             title: title,
             detail: "",
-            dueAt: inferredDueAt ?? ""
+            dueDate: formattedActionDate(inferredDueDate),
+            dueTime: inferredDueTime ?? ""
         )
     }
 
@@ -491,9 +502,9 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
         return first.uppercased() + title.dropFirst()
     }
 
-    private func inferredDueAt(from rawThought: String) -> String? {
+    private func inferredDueDate(from rawThought: String) -> Date? {
         let lowercasedThought = rawThought.lowercased()
-        guard let time = inferredTimeComponents(from: lowercasedThought) else {
+        guard hasDueDateSignal(in: lowercasedThought) || inferredTimeComponents(from: lowercasedThought) != nil else {
             return nil
         }
 
@@ -504,27 +515,72 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
         if lowercasedThought.contains("tomorrow"),
            let tomorrow = calendar.date(byAdding: .day, value: 1, to: baseDate) {
             baseDate = tomorrow
+        } else if lowercasedThought.contains("next week"),
+                  let nextWeek = calendar.date(byAdding: .day, value: 7, to: baseDate) {
+            baseDate = nextWeek
+        } else if let weekday = weekdayNumber(in: lowercasedThought),
+                  let nextWeekday = nextDate(forWeekday: weekday, calendar: calendar, from: baseDate) {
+            baseDate = nextWeekday
         }
 
-        let baseComponents = calendar.dateComponents([.year, .month, .day], from: baseDate)
-        var dueComponents = DateComponents()
-        dueComponents.calendar = calendar
-        dueComponents.timeZone = .current
-        dueComponents.year = baseComponents.year
-        dueComponents.month = baseComponents.month
-        dueComponents.day = baseComponents.day
-        dueComponents.hour = time.hour
-        dueComponents.minute = time.minute
-        dueComponents.second = 0
+        return calendar.startOfDay(for: baseDate)
+    }
 
-        guard let dueDate = calendar.date(from: dueComponents) else {
+    private func inferredDueTime(from rawThought: String) -> String? {
+        guard let time = inferredTimeComponents(from: rawThought.lowercased()) else {
             return nil
         }
 
-        return Self.localISO8601DateTime.string(from: dueDate)
+        return String(format: "%02d:%02d", time.hour, time.minute)
+    }
+
+    private func formattedActionDate(_ date: Date?) -> String {
+        date.map { Self.actionDate.string(from: $0) } ?? ""
+    }
+
+    private func hasDueDateSignal(in text: String) -> Bool {
+        containsAny(
+            text,
+            [
+                "today", "tomorrow", "tonight", "this afternoon", "this evening",
+                "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+                "next week", "by ", "before ", "due", "deadline"
+            ]
+        ) || text.range(of: #"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}/\d{1,2}\b"#, options: .regularExpression) != nil
+    }
+
+    private func weekdayNumber(in text: String) -> Int? {
+        let weekdays = [
+            "sunday": 1,
+            "monday": 2,
+            "tuesday": 3,
+            "wednesday": 4,
+            "thursday": 5,
+            "friday": 6,
+            "saturday": 7
+        ]
+        return weekdays.first { text.contains($0.key) }?.value
+    }
+
+    private func nextDate(forWeekday weekday: Int, calendar: Calendar, from date: Date) -> Date? {
+        let currentWeekday = calendar.component(.weekday, from: date)
+        let daysAhead = (weekday - currentWeekday + 7) % 7
+        return calendar.date(byAdding: .day, value: daysAhead == 0 ? 7 : daysAhead, to: date)
     }
 
     private func inferredTimeComponents(from text: String) -> (hour: Int, minute: Int)? {
+        if text.contains("eod") || text.contains("end of day") {
+            return (17, 0)
+        }
+
+        if text.contains("noon") {
+            return (12, 0)
+        }
+
+        if text.contains("midnight") {
+            return (0, 0)
+        }
+
         let pattern = #"\b(\d{1,2})(?::(\d{2}))?\s?(am|pm)\b|\b(\d{1,2}):(\d{2})\b|\b(at|by|before)\s+(\d{1,2})\b"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
             return nil
@@ -582,6 +638,29 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
         return prompt
     }
 
+    private func forcedTodoDirective(from prompt: String) -> Bool {
+        let lines = prompt.components(separatedBy: .newlines)
+        return lines.contains { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.hasPrefix("todoDirective:")
+                && trimmed.localizedCaseInsensitiveContains("forced")
+        }
+    }
+
+    private func normalizedForcedTodoTitle(_ title: String, fallback: String) -> String {
+        let cleanedTitle = clean(title)
+        guard !cleanedTitle.isEmpty else {
+            return clean(fallback)
+        }
+
+        guard ThoughtPrefixParser.todoHint(in: cleanedTitle) != nil else {
+            return cleanedTitle
+        }
+
+        let strippedTitle = ThoughtPrefixParser.todoBody(in: cleanedTitle)
+        return clean(strippedTitle).isEmpty ? clean(fallback) : clean(strippedTitle)
+    }
+
     private func containsAny(_ text: String, _ needles: [String]) -> Bool {
         needles.contains { text.contains($0) }
     }
@@ -595,9 +674,9 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
         return ["todo", "notebook", "both"].contains(normalized) ? normalized : "notebook"
     }
 
-    private static let localISO8601DateTime: DateFormatter = {
+    private static let actionDate: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssXXXXX"
+        formatter.dateFormat = "yyyy-MM-dd"
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = .current
         return formatter
@@ -712,11 +791,13 @@ private struct FoundationActionItem {
     var title: String
     @Guide(description: "Short detail, or empty.")
     var detail: String
-    @Guide(description: "ISO-8601 date-time with timezone if inferable, otherwise empty.")
-    var dueAt: String
+    @Guide(description: "YYYY-MM-DD date if inferable, otherwise empty.")
+    var dueDate: String
+    @Guide(description: "24-hour HH:mm time if explicitly provided, otherwise empty.")
+    var dueTime: String
 
     var output: ThoughtProcessingOutput.Action {
-        ThoughtProcessingOutput.Action(title: title, detail: detail, dueAt: dueAt)
+        ThoughtProcessingOutput.Action(title: title, detail: detail, dueDate: dueDate, dueTime: dueTime)
     }
 }
 

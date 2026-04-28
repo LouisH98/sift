@@ -10,6 +10,7 @@ Sift is a small macOS app for quickly capturing random thoughts before they disa
 
 - **Fast capture from the notch or menu bar**: open Sift with the default `Option + Space` shortcut and jot down whatever is on your mind.
 - **Categorisation with `<topic>:` prefixes**: write something like `work: follow up on launch notes` to hint where a thought belongs. Sift highlights the prefix while you type and strongly prefers a matching notebook page during processing.
+- **Forced TODOs with `!` prefixes**: start a thought with `!`, for example `! follow up with Sam tomorrow at 3pm`, to force a todo while still letting the AI extract due dates and other structure.
 - **Thought distillation**: AI turns raw thoughts into titles, summaries, tags, related thoughts, daily digests, and markdown notebook pages.
 - **Todo creation**: concrete follow-ups become action items, with due-date inference and optional reminder notifications.
 - **Raw and distilled library views**: search raw thoughts, browse distilled pages, render markdown, move or delete pages, and use AI-powered `Tidy` reorganisation.

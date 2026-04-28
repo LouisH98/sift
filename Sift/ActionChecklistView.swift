@@ -287,15 +287,15 @@ private struct ActionRow: View {
                         .lineLimit(1)
                 }
 
-                if let dueAt = item.dueAt {
+                if let dueDate = item.exactDueAt ?? item.dueDate {
                     HStack(spacing: 5) {
-                        Image(systemName: dueIconName(for: dueAt))
+                        Image(systemName: dueIconName(for: item))
                             .font(.caption2.weight(.semibold))
-                            .foregroundStyle(dueIconColor(for: dueAt))
+                            .foregroundStyle(dueIconColor(for: item))
 
-                        Text(DateFormatter.actionDueDate.string(from: dueAt))
+                        Text(dueDateLabel(for: item, date: dueDate))
                             .font(.caption2.weight(.semibold))
-                            .foregroundStyle(dueTextColor(for: dueAt))
+                            .foregroundStyle(dueTextColor(for: item))
                     }
                         .lineLimit(1)
                 }
@@ -388,24 +388,30 @@ private struct ActionRow: View {
         return text
     }
 
-    private func dueIconName(for dueAt: Date) -> String {
-        dueAt < Date() ? "exclamationmark.circle.fill" : "clock"
+    private func dueDateLabel(for item: ActionItem, date: Date) -> String {
+        item.hasDueTime
+            ? DateFormatter.actionDueDate.string(from: date)
+            : DateFormatter.actionDueDateOnly.string(from: date)
     }
 
-    private func dueIconColor(for dueAt: Date) -> Color {
+    private func dueIconName(for item: ActionItem) -> String {
+        item.isDueOverdue ? "exclamationmark.circle.fill" : (item.hasDueTime ? "clock" : "calendar")
+    }
+
+    private func dueIconColor(for item: ActionItem) -> Color {
         if showCompletedState {
             return .green.opacity(0.48)
         }
 
-        return dueAt < Date() ? .red.opacity(0.82) : .white.opacity(0.5)
+        return item.isDueOverdue ? .red.opacity(0.82) : .white.opacity(0.5)
     }
 
-    private func dueTextColor(for dueAt: Date) -> Color {
+    private func dueTextColor(for item: ActionItem) -> Color {
         if showCompletedState {
             return .green.opacity(0.56)
         }
 
-        return dueAt < Date() ? .red.opacity(0.82) : .teal.opacity(0.72)
+        return item.isDueOverdue ? .red.opacity(0.82) : .teal.opacity(0.72)
     }
 
     private func normalizedComparisonText(_ text: String) -> String {
@@ -456,6 +462,13 @@ private extension DateFormatter {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
+        return formatter
+    }()
+
+    static let actionDueDateOnly: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
         return formatter
     }()
 }

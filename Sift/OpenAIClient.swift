@@ -4,7 +4,8 @@ struct ThoughtProcessingOutput: Decodable {
     struct Action: Decodable {
         let title: String
         let detail: String
-        let dueAt: String
+        let dueDate: String
+        let dueTime: String
     }
 
     let title: String
@@ -501,14 +502,14 @@ struct OpenAIClient: ThoughtAIProvider {
     private static let processingExampleJSON = """
     {
       "title": "Follow up on launch plan",
-      "distilled": "Follow up with Sam about the launch plan before Friday.",
+      "distilled": "Follow up with Sam about the launch plan by Friday at 3pm.",
       "classification": "both",
       "tags": ["launch", "follow-up"],
       "pageId": "",
       "pageParentId": "",
       "pageTitle": "Launch Planning",
       "pageSummary": "Current decisions, open loops, and follow-ups for launch planning.",
-      "pageBodyMarkdown": "## Notes\\n\\nFollow up with Sam about the launch plan before Friday.",
+      "pageBodyMarkdown": "## Notes\\n\\nFollow up with Sam about the launch plan by Friday at 3pm.",
       "themeTitle": "Launch Planning",
       "themeSummary": "Current decisions, open loops, and follow-ups for launch planning.",
       "linkedThoughtIds": [],
@@ -519,7 +520,8 @@ struct OpenAIClient: ThoughtAIProvider {
         {
           "title": "Follow up with Sam",
           "detail": "Ask Sam about the launch plan.",
-          "dueAt": "2026-05-01T17:00:00+01:00"
+          "dueDate": "2026-05-01",
+          "dueTime": "15:00"
         }
       ]
     }
@@ -649,13 +651,17 @@ struct OpenAIClient: ThoughtAIProvider {
                 "items": [
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["title", "detail", "dueAt"],
+                    "required": ["title", "detail", "dueDate", "dueTime"],
                     "properties": [
                         "title": ["type": "string"],
                         "detail": ["type": "string"],
-                        "dueAt": [
+                        "dueDate": [
                             "type": "string",
-                            "description": "ISO-8601 date-time with timezone if explicitly or strongly inferable from the thought and date context, otherwise empty string."
+                            "description": "YYYY-MM-DD date if the thought specifies or strongly implies a due date, including relative dates like today, tomorrow, Friday, next week, by Friday, or before Friday; otherwise empty string."
+                        ],
+                        "dueTime": [
+                            "type": "string",
+                            "description": "24-hour HH:mm time only if the thought includes an explicit time-of-day signal such as at 3pm, 14:30, noon, midnight, EOD, end of day, tonight, this afternoon, or this evening; otherwise empty string."
                         ]
                     ]
                 ]

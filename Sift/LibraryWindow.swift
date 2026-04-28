@@ -544,17 +544,23 @@ private struct RawThoughtRow: View {
 
     private var highlightedRawText: AttributedString {
         var value = AttributedString(thought.text)
-        guard
-            let prefixLength = thought.themeHintPrefixLength,
-            prefixLength > 0,
-            prefixLength <= thought.text.count
-        else {
-            return value
+
+        if let prefixLength = thought.themeHintPrefixLength,
+           prefixLength > 0,
+           prefixLength <= thought.text.count {
+            let end = value.index(value.startIndex, offsetByCharacters: prefixLength)
+            value[value.startIndex..<end].foregroundColor = Color.thoughtCategoryColor(hex: thought.themeHintColorHex)
+            value[value.startIndex..<end].font = .body.bold()
         }
 
-        let end = value.index(value.startIndex, offsetByCharacters: prefixLength)
-        value[value.startIndex..<end].foregroundColor = Color.thoughtCategoryColor(hex: thought.themeHintColorHex)
-        value[value.startIndex..<end].font = .body.bold()
+        if let todoHint = ThoughtPrefixParser.todoHint(in: thought.text),
+           todoHint.prefixLength > 0,
+           todoHint.prefixLength <= thought.text.count {
+            let end = value.index(value.startIndex, offsetByCharacters: todoHint.prefixLength)
+            value[value.startIndex..<end].foregroundColor = .orange
+            value[value.startIndex..<end].font = .body.bold()
+        }
+
         return value
     }
 }
