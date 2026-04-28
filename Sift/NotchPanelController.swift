@@ -13,6 +13,7 @@ final class NotchPanelController {
     private let store: ThoughtStore
     private let animationModel = NotchAnimationModel()
     private let actionNavigationModel = ActionListNavigationModel()
+    private let chatModel = ThoughtChatModel()
     private let appearanceSettings = NotchAppearanceSettings.shared
     private var panel: NotchPanel?
     private var activationSurfaces: [ActivationSurface] = []
@@ -139,6 +140,7 @@ final class NotchPanelController {
         targetIsOpen = false
         pendingOrderOut?.cancel()
         pendingOrderOut = nil
+        chatModel.resetSession()
 
         guard let panel else {
             return
@@ -196,6 +198,7 @@ final class NotchPanelController {
                 store: store,
                 processor: .shared,
                 actionNavigationModel: actionNavigationModel,
+                chatModel: chatModel,
                 onSave: { [weak self] text in
                     Task { @MainActor in
                         guard let self else {
@@ -663,6 +666,8 @@ final class NotchPanelController {
             scheduleCaptureFocus()
         case .actions:
             scheduleActionFocus()
+        case .chat:
+            scheduleChatFocus()
         }
     }
 
@@ -694,6 +699,38 @@ final class NotchPanelController {
 
         if panel.firstResponder !== actionView {
             panel.makeFirstResponder(actionView)
+        }
+    }
+
+    private func scheduleChatFocus() {
+        focusChatInput()
+
+        for delay in [0.04, 0.12, 0.24] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.focusChatInput()
+            }
+        }
+    }
+
+    private func focusChatInput() {
+        guard
+            animationModel.selectedPage == .chat,
+            let panel,
+            panel.isVisible
+        else {
+            return
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+
+        guard let chatInput = panel.contentView?.firstDescendant(withIdentifier: .siftChatInput),
+              let textView = chatInput.firstDescendant(ofType: NSTextView.self) else {
+            return
+        }
+
+        if panel.firstResponder !== textView {
+            panel.makeFirstResponder(textView)
         }
     }
 
@@ -917,7 +954,7 @@ final class NotchAnimationModel: ObservableObject {
             return
         }
 
-        withAnimation(Self.contentAnimation) {
+        withAnimation(Self.pageSwitchAnimation) {
             selectedPage = selectedPage.moving(delta)
         }
     }
@@ -944,6 +981,14 @@ final class NotchAnimationModel: ObservableObject {
         } else {
             .timingCurve(0.16, 1, 0.3, 1, duration: 0.7)
         }
+    }
+
+    static var pageSwitchAnimation: Animation {
+        .smooth(duration: 0.12)
+    }
+
+    static var pageResizeAnimation: Animation {
+        .interactiveSpring(response: 0.24, dampingFraction: 0.92, blendDuration: 0.04)
     }
 
     static var contentDismissalAnimation: Animation {
