@@ -3,6 +3,7 @@ import SwiftUI
 enum NotchPage: Int, CaseIterable {
     case capture
     case actions
+    case chat
 
     var iconName: String {
         switch self {
@@ -10,6 +11,8 @@ enum NotchPage: Int, CaseIterable {
             return "text.bubble"
         case .actions:
             return "checklist"
+        case .chat:
+            return "sparkle.magnifyingglass"
         }
     }
 
@@ -19,6 +22,8 @@ enum NotchPage: Int, CaseIterable {
             return "Capture thought"
         case .actions:
             return "Todo list"
+        case .chat:
+            return "Chat"
         }
     }
 
@@ -42,13 +47,15 @@ struct NotchView: View {
     @ObservedObject var store: ThoughtStore
     @ObservedObject var processor: ThoughtProcessor
     @ObservedObject var actionNavigationModel: ActionListNavigationModel
+    @ObservedObject var chatModel: ThoughtChatModel
     @ObservedObject private var appearanceSettings = NotchAppearanceSettings.shared
 
     let onSave: (String) -> Void
     let onCancel: () -> Void
     let onPageDelta: (Int) -> Void
 
-    private let openSize = CGSize(width: 540, height: 184)
+    private let baseOpenSize = CGSize(width: 540, height: 184)
+    private let chatOpenHeightIncrease: CGFloat = 50
     private let topBlurBleed: CGFloat = 32
     private let visibleStageHeight: CGFloat = 240
     private let openingBlurRadius: CGFloat = 14
@@ -82,6 +89,13 @@ struct NotchView: View {
         }
 
         return model.isOpen ? openSize : model.closedNotchSize
+    }
+
+    private var openSize: CGSize {
+        CGSize(
+            width: baseOpenSize.width,
+            height: baseOpenSize.height + (model.selectedPage == .chat ? chatOpenHeightIncrease : 0)
+        )
     }
 
     private var topCornerRadius: CGFloat {
@@ -156,6 +170,7 @@ struct NotchView: View {
                 .blur(radius: paneBlurRadius)
                 .animation(model.isOpen ? NotchAnimationModel.openAnimation : NotchAnimationModel.closeAnimation, value: model.isOpen)
                 .animation(NotchAnimationModel.blurAnimation, value: model.isBlurred)
+                .animation(NotchAnimationModel.pageResizeAnimation, value: currentSize.height)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
@@ -204,6 +219,7 @@ struct NotchView: View {
         .offset(y: topBlurBleed)
         .animation(NotchAnimationModel.openAnimation, value: model.isOpen)
         .animation(NotchAnimationModel.openingGlowAnimation, value: model.transitionGlowStrength)
+        .animation(NotchAnimationModel.pageResizeAnimation, value: currentSize.height)
         .allowsHitTesting(false)
     }
 
@@ -237,28 +253,36 @@ struct NotchView: View {
                                 onCancel: onCancel
                             )
                         }
+                    case .chat:
+                        VStack(alignment: .leading, spacing: pageChromeSpacing) {
+                            pageChrome
+
+                            NotchChatView(
+                                store: store,
+                                chatModel: chatModel,
+                                onCancel: onCancel,
+                                onPageDelta: onPageDelta
+                            )
+                            .frame(maxHeight: .infinity, alignment: .top)
+                        }
                     }
                 }
                 .id(model.selectedPage)
                 .transition(
                     .scale(scale: 0.92, anchor: .top)
                         .combined(with: .opacity)
-                        .animation(.smooth(duration: 0.18))
+                        .animation(NotchAnimationModel.pageSwitchAnimation)
                 )
                     .padding(.horizontal, 18)
                     .padding(.top, model.selectedPage == .capture ? 0 : pageContentTopPadding)
                     .padding(.bottom, model.selectedPage == .capture ? 2 : 20)
-                    .transition(
-                        .scale(scale: 0.8, anchor: .top)
-                            .combined(with: .opacity)
-                            .animation(.smooth(duration: 0.35))
-                    )
                     .zIndex(1)
                     .frame(
                         width: openSize.width - 24,
                         height: openSize.height,
                         alignment: .topLeading
                     )
+                    .animation(NotchAnimationModel.pageResizeAnimation, value: openSize.height)
                     .opacity(model.isContentPresented ? 1 : 0)
                     .blur(radius: model.isContentPresented ? 0 : contentDismissalBlurRadius)
                     .animation(NotchAnimationModel.contentDismissalAnimation, value: model.isContentPresented)
@@ -362,6 +386,7 @@ struct NotchShape: Shape {
         store: .shared,
         processor: .shared,
         actionNavigationModel: ActionListNavigationModel(),
+        chatModel: ThoughtChatModel(),
         onSave: { _ in },
         onCancel: {},
         onPageDelta: { _ in }
