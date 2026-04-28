@@ -917,8 +917,8 @@ final class ActionReminderScheduler {
 
     private func notificationContent(for actionItem: ActionItem, exactDueDate: Date) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
-        content.title = "TODO due \(DateFormatter.actionReminderDueDate.string(from: exactDueDate))"
-        content.body = actionItem.title
+        content.title = actionItem.title
+        content.body = "TODO due \(DateFormatter.actionReminderDueDate.string(from: exactDueDate))"
         content.sound = .default
         content.userInfo = ["actionItemID": actionItem.id.uuidString]
         return content

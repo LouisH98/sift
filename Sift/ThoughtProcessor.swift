@@ -46,6 +46,9 @@ final class ThoughtProcessor: ObservableObject {
     private let store: ThoughtStore
     private let settings: AISettings
     private let synthesisPromptVersion = "synthesis-v2-compact-markdown"
+    private let thoughtQueueRetryDelay: UInt64 = 10_000_000_000
+    private var cancellables = Set<AnyCancellable>()
+    private var thoughtQueueTask: Task<Void, Never>?
     private var isRefreshingStalePages = false
 
     var isProcessing: Bool {
@@ -76,46 +79,75 @@ final class ThoughtProcessor: ObservableObject {
     private init() {
         store = .shared
         settings = .shared
+
+        settings.objectWillChange
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    await Task.yield()
+                    self?.startThoughtQueueIfNeeded()
+                }
+            }
+            .store(in: &cancellables)
+
+        startThoughtQueueIfNeeded()
     }
 
-    func enqueue(_ thought: Thought) {
-        guard settings.canProcess else {
-            return
-        }
-
-        guard !queuedThoughtIDs.contains(thought.id) else {
-            return
-        }
-
-        queuedThoughtIDs.insert(thought.id)
-
-        Task { @MainActor in
-            let didComplete = await process(thoughtID: thought.id)
-            queuedThoughtIDs.remove(thought.id)
-            if didComplete {
-                completionPulse += 1
-            }
-            await synthesizeDeferredPagesIfIdle()
-        }
+    func enqueue(_: Thought) {
+        startThoughtQueueIfNeeded()
     }
 
     func backfillUnprocessedThoughts() {
-        guard settings.canProcess, !isBackfilling else {
+        guard !isBackfilling else {
             return
         }
 
         isBackfilling = true
+        startThoughtQueueIfNeeded()
+    }
 
-        Task { @MainActor in
-            for thought in store.unprocessedThoughts() {
-                let didComplete = await process(thoughtID: thought.id)
-                if didComplete {
-                    completionPulse += 1
-                }
+    private func startThoughtQueueIfNeeded() {
+        guard thoughtQueueTask == nil else {
+            return
+        }
+
+        guard !store.unprocessedThoughts().isEmpty else {
+            isBackfilling = false
+            return
+        }
+
+        thoughtQueueTask = Task { @MainActor [weak self] in
+            await self?.processThoughtQueue()
+        }
+    }
+
+    private func processThoughtQueue() async {
+        defer {
+            queuedThoughtIDs.removeAll()
+            isBackfilling = false
+            thoughtQueueTask = nil
+        }
+
+        while !Task.isCancelled {
+            guard let thought = store.unprocessedThoughts().first else {
+                await synthesizeDeferredPagesIfIdle()
+                return
             }
 
-            isBackfilling = false
-            await synthesizeDeferredPagesIfIdle()
+            guard settings.canProcess else {
+                try? await Task.sleep(nanoseconds: thoughtQueueRetryDelay)
+                continue
+            }
+
+            queuedThoughtIDs.insert(thought.id)
+            let didComplete = await process(thoughtID: thought.id)
+            queuedThoughtIDs.remove(thought.id)
+
+            if didComplete {
+                completionPulse += 1
+                await synthesizeDeferredPagesIfIdle()
+            } else {
+                try? await Task.sleep(nanoseconds: thoughtQueueRetryDelay)
+            }
         }
     }
 
