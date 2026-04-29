@@ -283,22 +283,28 @@ private struct ChatMessageRow: View {
     }
 
     private var displayText: String {
-        if message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, isLoading {
+        if isThinkingPlaceholder {
             return "Thinking..."
         }
 
         return message.text
     }
 
+    private var isThinkingPlaceholder: Bool {
+        message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && isLoading
+    }
+
     @ViewBuilder
     private var messageContent: some View {
-        if isUser || displayText == "Thinking..." {
+        if isUser {
             Text(displayText)
                 .font(.system(size: isUser ? 12 : 12.5, weight: isUser ? .medium : .regular))
-                .foregroundStyle(isUser ? .white.opacity(0.92) : .white.opacity(0.86))
+                .foregroundStyle(.white.opacity(0.92))
                 .multilineTextAlignment(isUser ? .trailing : .leading)
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
+        } else if isThinkingPlaceholder {
+            ThinkingStatusText(text: displayText)
         } else if shouldUseStreamingRenderer {
             StreamingMarkdownChatText(text: displayText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -311,7 +317,7 @@ private struct ChatMessageRow: View {
     }
 
     private var shouldUseStreamingRenderer: Bool {
-        !isUser && displayText != "Thinking..." && (isLoading || shouldKeepStreamingRenderer)
+        !isUser && !isThinkingPlaceholder && (isLoading || shouldKeepStreamingRenderer)
     }
 
     private func holdStreamingRenderer(for text: String) {
@@ -330,6 +336,56 @@ private struct ChatMessageRow: View {
 
             shouldKeepStreamingRenderer = false
         }
+    }
+}
+
+private struct ThinkingStatusText: View {
+    let text: String
+
+    private let duration: TimeInterval = 1.65
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 60)) { timeline in
+            let seconds = timeline.date.timeIntervalSinceReferenceDate
+            let phase = CGFloat(seconds.truncatingRemainder(dividingBy: duration) / duration)
+
+            textView
+                .foregroundStyle(.white.opacity(0.48))
+                .overlay(alignment: .leading) {
+                    GeometryReader { geometry in
+                        let width = geometry.size.width
+                        let sheenWidth = max(width * 0.58, 24)
+                        let travel = width + sheenWidth * 2
+                        let xOffset = -sheenWidth + travel * phase
+
+                        LinearGradient(
+                            stops: [
+                                .init(color: .white.opacity(0), location: 0),
+                                .init(color: .white.opacity(0.95), location: 0.5),
+                                .init(color: .white.opacity(0), location: 1)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: sheenWidth)
+                        .offset(x: xOffset)
+                        .blur(radius: 0.35)
+                        .mask(alignment: .leading) {
+                            textView
+                                .frame(width: width, height: geometry.size.height, alignment: .leading)
+                        }
+                    }
+                }
+                .fixedSize(horizontal: true, vertical: true)
+                .accessibilityLabel(text)
+        }
+    }
+
+    private var textView: some View {
+        Text(text)
+            .font(.system(size: 12.5, weight: .regular))
+            .multilineTextAlignment(.leading)
+            .lineLimit(1)
     }
 }
 
