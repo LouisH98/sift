@@ -239,6 +239,9 @@ private struct ChatMessageRow: View {
     let message: ThoughtChatMessage
     let isLoading: Bool
 
+    @State private var shouldKeepStreamingRenderer = false
+    @State private var streamingHoldID = UUID()
+
     private var isUser: Bool {
         message.role == .user
     }
@@ -255,16 +258,7 @@ private struct ChatMessageRow: View {
                 }
 
                 messageContent
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 8)
-                    .background {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(isUser ? .white.opacity(0.12) : .white.opacity(0.06))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .strokeBorder(.white.opacity(isUser ? 0.14 : 0.08), lineWidth: 1)
-                            }
-                    }
+                    .padding(.vertical, 2)
 
                 if !isUser {
                     Spacer(minLength: 72)
@@ -273,6 +267,19 @@ private struct ChatMessageRow: View {
 
         }
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+        .onAppear {
+            if shouldUseStreamingRenderer {
+                holdStreamingRenderer(for: displayText)
+            }
+        }
+        .onChange(of: message.text) { _, newText in
+            holdStreamingRenderer(for: newText)
+        }
+        .onChange(of: isLoading) { _, isLoading in
+            if !isLoading {
+                holdStreamingRenderer(for: displayText)
+            }
+        }
     }
 
     private var displayText: String {
@@ -292,6 +299,9 @@ private struct ChatMessageRow: View {
                 .multilineTextAlignment(isUser ? .trailing : .leading)
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
+        } else if shouldUseStreamingRenderer {
+            StreamingMarkdownChatText(text: displayText)
+                .fixedSize(horizontal: false, vertical: true)
         } else {
             MarkdownDocumentView(markdown: displayText, style: .chat)
                 .multilineTextAlignment(.leading)
@@ -299,6 +309,124 @@ private struct ChatMessageRow: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
+
+    private var shouldUseStreamingRenderer: Bool {
+        !isUser && displayText != "Thinking..." && (isLoading || shouldKeepStreamingRenderer)
+    }
+
+    private func holdStreamingRenderer(for text: String) {
+        guard !isUser, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        let holdID = UUID()
+        streamingHoldID = holdID
+        shouldKeepStreamingRenderer = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + StreamingMarkdownChatText.revealDuration(for: text) + 0.08) {
+            guard streamingHoldID == holdID, !isLoading else {
+                return
+            }
+
+            shouldKeepStreamingRenderer = false
+        }
+    }
+}
+
+private struct StreamingMarkdownChatText: View {
+    let text: String
+
+    @State private var visibleMarkdown = ""
+    @State private var targetMarkdown = ""
+    @State private var pendingFragments: [String] = []
+    @State private var isRevealing = false
+    @State private var revealID = UUID()
+
+    var body: some View {
+        MarkdownDocumentView(markdown: visibleMarkdown, style: .chat)
+            .multilineTextAlignment(.leading)
+            .lineLimit(nil)
+            .onAppear {
+                syncMarkdown(with: text)
+            }
+            .onChange(of: text) { _, newText in
+                syncMarkdown(with: newText)
+            }
+    }
+
+    private func syncMarkdown(with newText: String) {
+        if newText.hasPrefix(targetMarkdown) {
+            let delta = String(newText.dropFirst(targetMarkdown.count))
+            pendingFragments.append(contentsOf: Self.fragments(from: delta))
+        } else {
+            revealID = UUID()
+            visibleMarkdown = ""
+            pendingFragments = Self.fragments(from: newText)
+            isRevealing = false
+        }
+
+        targetMarkdown = newText
+        revealNextIfNeeded()
+    }
+
+    private func revealNextIfNeeded() {
+        guard !isRevealing else {
+            return
+        }
+
+        isRevealing = true
+        revealNext(revealID)
+    }
+
+    private func revealNext(_ id: UUID) {
+        guard id == revealID else {
+            return
+        }
+
+        guard !pendingFragments.isEmpty else {
+            isRevealing = false
+            return
+        }
+
+        let fragment = pendingFragments.removeFirst()
+        withAnimation(.linear(duration: Self.fragmentFadeDuration)) {
+            visibleMarkdown += fragment
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.fragmentRevealInterval) {
+            revealNext(id)
+        }
+    }
+
+    static func revealDuration(for text: String) -> TimeInterval {
+        TimeInterval(max(fragments(from: text).count - 1, 0)) * fragmentRevealInterval + fragmentFadeDuration
+    }
+
+    private static func fragments(from text: String) -> [String] {
+        var fragments: [String] = []
+        var current = ""
+        var currentIsWhitespace: Bool?
+
+        for character in text {
+            let isWhitespace = character.isWhitespace
+            if let currentIsWhitespace, currentIsWhitespace != isWhitespace {
+                fragments.append(current)
+                current = ""
+            }
+
+            current.append(character)
+            currentIsWhitespace = isWhitespace
+        }
+
+        if !current.isEmpty {
+            fragments.append(current)
+        }
+
+        return fragments
+    }
+
+    private static let fragmentRevealInterval: TimeInterval = 0.02
+    private static let fragmentFadeDuration: TimeInterval = 0.3
 }
 
 private struct PendingProposedChatAction: Identifiable, Equatable {

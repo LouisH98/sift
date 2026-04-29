@@ -1,5 +1,14 @@
 import Foundation
 
+#if DEBUG
+func debugChatStream(_ message: String) {
+    let timestamp = String(format: "%.3f", Date().timeIntervalSince1970)
+    print("[SiftChatStream \(timestamp)] \(message)")
+}
+#else
+func debugChatStream(_ message: String) {}
+#endif
+
 struct ThoughtChatService {
     private let retriever = ThoughtContextRetriever()
     private let maxContextCharacters = 10_000
@@ -26,7 +35,9 @@ struct ThoughtChatService {
                     return
                 }
 
+                debugChatStream("ask start provider=\(settings.providerKind.rawValue) endpoint=\(settings.apiEndpoint.rawValue) model=\(settings.modelID)")
                 if settings.providerKind == .openAICompatible, settings.apiEndpoint == .responses {
+                    debugChatStream("ask branch=responses-agent")
                     do {
                         try await askAgentically(
                             question: question,
@@ -37,11 +48,13 @@ struct ThoughtChatService {
                         )
                         continuation.finish()
                     } catch {
+                        debugChatStream("ask responses-agent failed error=\(error)")
                         continuation.finish(throwing: error)
                     }
                     return
                 }
 
+                debugChatStream("ask branch=provider-streamRawText")
                 let sources = retriever.sources(for: question, store: store)
                 continuation.yield(.finalSources(sources))
 
@@ -100,6 +113,7 @@ struct ThoughtChatService {
             continuation.yield(.proposedActions(proposedActions))
         }
 
+        var streamedAnswer = ""
         let result = try await client.run(
             question: question,
             history: history,
@@ -208,17 +222,26 @@ struct ThoughtChatService {
                 default:
                     return jsonString(["error": "Unknown tool \(call.name)."])
                 }
+            },
+            onTextDelta: { delta in
+                debugChatStream("service delta chars=\(delta.count) before_total=\(streamedAnswer.count)")
+                streamedAnswer += delta
+                continuation.yield(.partialAnswer(streamedAnswer))
+                debugChatStream("service yielded partial total_chars=\(streamedAnswer.count)")
             }
         )
 
         appendUnique(result.webSources, to: &collectedSources)
+        if let responseID = result.responseID {
+            continuation.yield(.responseID(responseID))
+        }
         publishSources()
         publishActions()
 
         let finalText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         if finalText.isEmpty {
             continuation.yield(.partialAnswer("I could not produce an answer from the available tools."))
-        } else {
+        } else if streamedAnswer.trimmingCharacters(in: .whitespacesAndNewlines) != finalText {
             continuation.yield(.partialAnswer(finalText))
         }
     }
@@ -823,7 +846,13 @@ private struct AgentToolCall {
 
 private struct OpenAIResponsesAgentResult {
     let text: String
+    let responseID: String?
     let webSources: [ThoughtChatSource]
+}
+
+private struct OpenAIResponsesInitialInput {
+    let input: [[String: Any]]
+    let previousResponseID: String?
 }
 
 @MainActor
@@ -840,21 +869,31 @@ private struct OpenAIResponsesAgentClient {
         question: String,
         history: [ThoughtChatMessage],
         maxToolRounds: Int,
-        runTool: @escaping (AgentToolCall) async -> String
+        runTool: @escaping (AgentToolCall) async -> String,
+        onTextDelta: ((String) -> Void)? = nil
     ) async throws -> OpenAIResponsesAgentResult {
-        var input = initialInput(question: question, history: history)
-        var previousResponseID: String?
+        let initial = initialInput(question: question, history: history)
+        var input = initial.input
+        var previousResponseID = initial.previousResponseID
         var latestText = ""
+        var latestResponseID: String?
         var webSources: [ThoughtChatSource] = []
 
+        debugChatStream("responses initial previous_response=\(previousResponseID != nil) input_items=\(input.count)")
+
         for _ in 0...maxToolRounds {
-            let response = try await createResponse(input: input, previousResponseID: previousResponseID)
+            let response = try await createResponse(
+                input: input,
+                previousResponseID: previousResponseID,
+                onTextDelta: onTextDelta
+            )
             latestText = response.text
+            latestResponseID = response.id.isEmpty ? nil : response.id
             appendUnique(response.webSources, to: &webSources)
 
             let calls = response.functionCalls
             guard !calls.isEmpty else {
-                return OpenAIResponsesAgentResult(text: latestText, webSources: webSources)
+                return OpenAIResponsesAgentResult(text: latestText, responseID: latestResponseID, webSources: webSources)
             }
 
             previousResponseID = response.id
@@ -872,11 +911,16 @@ private struct OpenAIResponsesAgentClient {
 
         return OpenAIResponsesAgentResult(
             text: latestText.isEmpty ? "I had to stop after several tool calls. Try narrowing the request." : latestText,
+            responseID: latestResponseID,
             webSources: webSources
         )
     }
 
-    private func createResponse(input: [[String: Any]], previousResponseID: String?) async throws -> OpenAIResponsesEnvelope {
+    private func createResponse(
+        input: [[String: Any]],
+        previousResponseID: String?,
+        onTextDelta: ((String) -> Void)? = nil
+    ) async throws -> OpenAIResponsesEnvelope {
         var payload: [String: Any] = [
             "model": settings.modelID.trimmingCharacters(in: .whitespacesAndNewlines),
             "instructions": agentInstructions,
@@ -891,12 +935,35 @@ private struct OpenAIResponsesAgentClient {
             payload["previous_response_id"] = previousResponseID
         }
 
+        if onTextDelta != nil {
+            payload["stream"] = true
+        }
+
         var request = authenticatedRequest(url: try endpointURL(path: "responses"))
         request.httpMethod = "POST"
         request.timeoutInterval = 120
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if onTextDelta != nil {
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
+        if let onTextDelta {
+            debugChatStream("responses stream request previous_response=\(previousResponseID != nil) input_items=\(input.count)")
+            do {
+                let envelope = try await streamResponse(request: request, onTextDelta: onTextDelta)
+                debugChatStream("responses stream success text_chars=\(envelope.text.count) tool_calls=\(envelope.functionCalls.count)")
+                return envelope
+            } catch {
+                debugChatStream("responses stream failed no_fallback error=\(error)")
+                throw error
+            }
+        }
+
+        return try await response(for: request)
+    }
+
+    private func response(for request: URLRequest) async throws -> OpenAIResponsesEnvelope {
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw OpenAIClientError.invalidResponse
@@ -909,10 +976,188 @@ private struct OpenAIResponsesAgentClient {
         return try JSONDecoder().decode(OpenAIResponsesEnvelope.self, from: data)
     }
 
+    private func streamResponse(
+        request: URLRequest,
+        onTextDelta: (String) -> Void
+    ) async throws -> OpenAIResponsesEnvelope {
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OpenAIClientError.invalidResponse
+        }
+
+        guard 200..<300 ~= httpResponse.statusCode else {
+            var errorData = Data()
+            for try await byte in bytes {
+                errorData.append(byte)
+            }
+            throw OpenAIClientError.apiError(apiErrorMessage(from: errorData) ?? "Agentic chat request failed with status \(httpResponse.statusCode).")
+        }
+        debugChatStream("sse http status=\(httpResponse.statusCode) content_type=\(httpResponse.value(forHTTPHeaderField: "Content-Type") ?? "missing")")
+
+        var eventName: String?
+        var dataLines: [String] = []
+        var completedResponse: OpenAIResponsesEnvelope?
+        var finalOutputText = ""
+        var eventCounts: [String: Int] = [:]
+        var lastEventType = "none"
+        var completedDecodeError: Error?
+        var completedResponseSummary = "none"
+
+        func handleEvent() throws {
+            let data = dataLines.joined(separator: "\n")
+            let typeHint = eventName
+            eventName = nil
+            dataLines.removeAll()
+
+            guard !data.isEmpty, data != "[DONE]" else {
+                return
+            }
+
+            guard let eventObject = try? JSONSerialization.jsonObject(with: Data(data.utf8)) as? [String: Any] else {
+                return
+            }
+
+            let type = eventObject["type"] as? String ?? typeHint
+            lastEventType = type ?? "unknown"
+            eventCounts[lastEventType, default: 0] += 1
+
+            if type == "response.output_text.delta",
+               let delta = eventObject["delta"] as? String,
+               !delta.isEmpty {
+                debugChatStream("sse response.output_text.delta chars=\(delta.count)")
+                onTextDelta(delta)
+            }
+
+            if type == "response.output_text.done",
+               let text = eventObject["text"] as? String {
+                finalOutputText = text
+            }
+
+            if type == "response.completed",
+               let responseObject = eventObject["response"],
+               let responseData = try? JSONSerialization.data(withJSONObject: responseObject) {
+                completedResponseSummary = summarizeResponseObject(responseObject)
+                do {
+                    completedResponse = try JSONDecoder().decode(OpenAIResponsesEnvelope.self, from: responseData)
+                } catch {
+                    completedDecodeError = error
+                    debugChatStream("sse response.completed decode_failed error=\(error)")
+                    debugChatStream("sse response.completed summary=\(completedResponseSummary)")
+                }
+            }
+
+            if type == "error", let errorObject = eventObject["error"] as? [String: Any] {
+                let message = errorObject["message"] as? String ?? "AI provider returned a streaming error."
+                throw OpenAIClientError.apiError(message)
+            }
+
+            if type == "response.failed",
+               let responseObject = eventObject["response"] as? [String: Any],
+               let errorObject = responseObject["error"] as? [String: Any] {
+                let message = errorObject["message"] as? String ?? "AI provider returned a failed streaming response."
+                throw OpenAIClientError.apiError(message)
+            }
+        }
+
+        func handleLineData(_ lineData: Data) throws {
+            var line = String(decoding: lineData, as: UTF8.self)
+            if line.last == "\r" {
+                line.removeLast()
+            }
+
+            if line.isEmpty {
+                try handleEvent()
+            } else if line.hasPrefix(":") {
+                return
+            } else if line.hasPrefix("event:") {
+                eventName = String(line.dropFirst("event:".count)).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("data:") {
+                dataLines.append(String(line.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces))
+            }
+        }
+
+        var byteCount = 0
+        var lineData = Data()
+        for try await byte in bytes {
+            byteCount += 1
+            if byte == 10 {
+                try handleLineData(lineData)
+                lineData.removeAll(keepingCapacity: true)
+            } else {
+                lineData.append(byte)
+            }
+        }
+
+        if !lineData.isEmpty {
+            try handleLineData(lineData)
+        }
+
+        debugChatStream("sse byte_count=\(byteCount)")
+
+        if !dataLines.isEmpty {
+            try handleEvent()
+        }
+
+        if let completedResponse {
+            debugChatStream("sse completed events=\(eventCountsSummary(eventCounts)) final_text_chars=\(finalOutputText.count)")
+            return completedResponse
+        }
+
+        guard !finalOutputText.isEmpty else {
+            let detail = [
+                "Streaming response ended without a decodable completed response.",
+                "events=\(eventCountsSummary(eventCounts))",
+                "last_event=\(lastEventType)",
+                "final_text_chars=\(finalOutputText.count)",
+                "completed_summary=\(completedResponseSummary)",
+                "decode_error=\(completedDecodeError.map(String.init(describing:)) ?? "none")"
+            ].joined(separator: " ")
+            throw OpenAIClientError.apiError(detail)
+        }
+
+        debugChatStream("sse completed from output_text.done events=\(eventCountsSummary(eventCounts)) final_text_chars=\(finalOutputText.count)")
+        return OpenAIResponsesEnvelope(outputText: finalOutputText)
+    }
+
+    private func eventCountsSummary(_ counts: [String: Int]) -> String {
+        counts
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key):\($0.value)" }
+            .joined(separator: ",")
+    }
+
+    private func summarizeResponseObject(_ responseObject: Any) -> String {
+        guard let object = responseObject as? [String: Any] else {
+            return "non_object"
+        }
+
+        let id = object["id"] as? String ?? "missing"
+        let status = object["status"] as? String ?? "missing"
+        let output = object["output"] as? [[String: Any]] ?? []
+        let outputSummary = output.enumerated().map { index, item in
+            let type = item["type"] as? String ?? "missing"
+            let name = item["name"] as? String
+            let content = item["content"] as? [[String: Any]] ?? []
+            let contentTypes = content.compactMap { $0["type"] as? String }.joined(separator: "|")
+
+            if let name {
+                return "\(index):\(type):\(name)"
+            }
+
+            if !contentTypes.isEmpty {
+                return "\(index):\(type):content=\(contentTypes)"
+            }
+
+            return "\(index):\(type)"
+        }.joined(separator: ";")
+
+        return "id=\(id) status=\(status) output_count=\(output.count) output=[\(outputSummary)]"
+    }
+
     private func initialInput(
         question: String,
         history: [ThoughtChatMessage]
-    ) -> [[String: Any]] {
+    ) -> OpenAIResponsesInitialInput {
         var priorMessages = history
             .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
@@ -922,32 +1167,26 @@ private struct OpenAIResponsesAgentClient {
             priorMessages.removeLast()
         }
 
-        let transcript = priorMessages
+        if let previousResponseID = priorMessages.reversed().compactMap(\.responseID).first {
+            return OpenAIResponsesInitialInput(
+                input: [messageInput(role: "user", text: question)],
+                previousResponseID: previousResponseID
+            )
+        }
+
+        let input = priorMessages
             .suffix(10)
             .map { message in
-                let role = message.role == .user ? "User" : "Assistant"
-                return "\(role): \(message.text)"
-            }
-            .joined(separator: "\n")
+                messageInput(role: message.role == .user ? "user" : "assistant", text: message.text)
+            } + [messageInput(role: "user", text: question)]
 
-        let text = """
-        Recent chat:
-        \(transcript.isEmpty ? "None" : transcript)
+        return OpenAIResponsesInitialInput(input: input, previousResponseID: nil)
+    }
 
-        Current user request:
-        \(question)
-        """
-
-        return [
-            [
-                "role": "user",
-                "content": [
-                    [
-                        "type": "input_text",
-                        "text": text
-                    ]
-                ]
-            ]
+    private func messageInput(role: String, text: String) -> [String: Any] {
+        [
+            "role": role,
+            "content": text
         ]
     }
 
@@ -1168,6 +1407,12 @@ private struct OpenAIResponsesEnvelope: Decodable {
     let id: String
     let output: [OpenAIResponseOutputItem]
     let outputText: String?
+
+    init(id: String = "", output: [OpenAIResponseOutputItem] = [], outputText: String? = nil) {
+        self.id = id
+        self.output = output
+        self.outputText = outputText
+    }
 
     enum CodingKeys: String, CodingKey {
         case id

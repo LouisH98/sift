@@ -10,6 +10,7 @@ struct ThoughtChatMessage: Identifiable, Equatable {
     let id: UUID
     let role: ThoughtChatRole
     var text: String
+    var responseID: String?
     var sources: [ThoughtChatSource]
     var proposedActions: [ThoughtChatProposedAction]
     let createdAt: Date
@@ -18,6 +19,7 @@ struct ThoughtChatMessage: Identifiable, Equatable {
         id: UUID = UUID(),
         role: ThoughtChatRole,
         text: String,
+        responseID: String? = nil,
         sources: [ThoughtChatSource] = [],
         proposedActions: [ThoughtChatProposedAction] = [],
         createdAt: Date = Date()
@@ -25,6 +27,7 @@ struct ThoughtChatMessage: Identifiable, Equatable {
         self.id = id
         self.role = role
         self.text = text
+        self.responseID = responseID
         self.sources = sources
         self.proposedActions = proposedActions
         self.createdAt = createdAt
@@ -108,6 +111,7 @@ enum ThoughtChatUpdate {
     case partialAnswer(String)
     case finalSources([ThoughtChatSource])
     case proposedActions([ThoughtChatProposedAction])
+    case responseID(String)
 }
 
 @MainActor
@@ -149,6 +153,7 @@ final class ThoughtChatModel: ObservableObject {
             var accumulatedText = ""
             var finalSources: [ThoughtChatSource] = []
             var proposedActions: [ThoughtChatProposedAction] = []
+            var responseID: String?
 
             do {
                 for try await update in service.ask(question: question, history: history, store: store, settings: settings) {
@@ -165,7 +170,10 @@ final class ThoughtChatModel: ObservableObject {
                         self?.updateAssistantMessage(id: assistantID, text: accumulatedText, sources: sources, proposedActions: proposedActions)
                     case .proposedActions(let actions):
                         proposedActions = actions
-                        self?.updateAssistantMessage(id: assistantID, text: accumulatedText, sources: finalSources, proposedActions: actions)
+                        self?.updateAssistantMessage(id: assistantID, text: accumulatedText, responseID: responseID, sources: finalSources, proposedActions: actions)
+                    case .responseID(let id):
+                        responseID = id
+                        self?.updateAssistantMessage(id: assistantID, text: accumulatedText, responseID: id, sources: finalSources, proposedActions: proposedActions)
                     }
                 }
             } catch {
@@ -173,9 +181,10 @@ final class ThoughtChatModel: ObservableObject {
                     return
                 }
 
+                debugChatStream("model caught error=\(error.localizedDescription)")
                 let fallbackSources = service.sources(for: question, store: store)
                 let fallbackText = accumulatedText.isEmpty ? "I could not answer from your thoughts right now." : accumulatedText
-                self?.updateAssistantMessage(id: assistantID, text: fallbackText, sources: fallbackSources, proposedActions: proposedActions)
+                self?.updateAssistantMessage(id: assistantID, text: fallbackText, responseID: responseID, sources: fallbackSources, proposedActions: proposedActions)
                 self?.errorMessage = error.localizedDescription
             }
 
@@ -239,6 +248,7 @@ final class ThoughtChatModel: ObservableObject {
     private func updateAssistantMessage(
         id: UUID,
         text: String,
+        responseID: String? = nil,
         sources: [ThoughtChatSource],
         proposedActions: [ThoughtChatProposedAction]
     ) {
@@ -246,7 +256,11 @@ final class ThoughtChatModel: ObservableObject {
             return
         }
 
+        debugChatStream("model update chars=\(text.count)")
         messages[index].text = text
+        if let responseID {
+            messages[index].responseID = responseID
+        }
         messages[index].sources = sources
         messages[index].proposedActions = proposedActions
     }
