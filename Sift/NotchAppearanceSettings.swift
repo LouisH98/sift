@@ -9,6 +9,9 @@ final class NotchAppearanceSettings: ObservableObject {
     private enum Keys {
         static let glowColorHex = "notch.glowColorHex"
         static let isGlowEnabled = "notch.isGlowEnabled"
+        #if DEBUG
+        static let debugSimulateNotchlessOnNotchedDisplays = "notch.debugSimulateNotchlessOnNotchedDisplays"
+        #endif
     }
 
     static let defaultGlowColorHex = "#38BDF8"
@@ -24,6 +27,14 @@ final class NotchAppearanceSettings: ObservableObject {
             UserDefaults.standard.set(glowColorHex, forKey: Keys.glowColorHex)
         }
     }
+
+    #if DEBUG
+    @Published var debugSimulateNotchlessOnNotchedDisplays: Bool {
+        didSet {
+            UserDefaults.standard.set(debugSimulateNotchlessOnNotchedDisplays, forKey: Keys.debugSimulateNotchlessOnNotchedDisplays)
+        }
+    }
+    #endif
 
     var glowColor: Color {
         Color(nsColor: nsGlowColor)
@@ -44,6 +55,9 @@ final class NotchAppearanceSettings: ObservableObject {
     private init() {
         glowColorHex = UserDefaults.standard.string(forKey: Keys.glowColorHex) ?? Self.defaultGlowColorHex
         isGlowEnabled = UserDefaults.standard.object(forKey: Keys.isGlowEnabled) as? Bool ?? true
+        #if DEBUG
+        debugSimulateNotchlessOnNotchedDisplays = UserDefaults.standard.bool(forKey: Keys.debugSimulateNotchlessOnNotchedDisplays)
+        #endif
     }
 }
 

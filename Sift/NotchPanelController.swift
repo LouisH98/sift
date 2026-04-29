@@ -15,6 +15,7 @@ final class NotchPanelController {
     private let actionNavigationModel = ActionListNavigationModel()
     private let chatModel = ThoughtChatModel()
     private let appearanceSettings = NotchAppearanceSettings.shared
+    private var settingsCancellables = Set<AnyCancellable>()
     private var panel: NotchPanel?
     private var activationSurfaces: [ActivationSurface] = []
     private var pendingOrderOut: DispatchWorkItem?
@@ -45,6 +46,7 @@ final class NotchPanelController {
 
     init(store: ThoughtStore) {
         self.store = store
+        observeDebugSettings()
     }
 
     var isVisible: Bool {
@@ -111,7 +113,10 @@ final class NotchPanelController {
                 closedNotchSize: closedNotchSize
             )
         } else {
-            animationModel.updateClosedNotchSize(closedNotchSize)
+            animationModel.updateDisplayConfiguration(
+                hideClosedNotch: shouldHideClosedNotch(on: screen),
+                closedNotchSize: closedNotchSize
+            )
         }
         animationModel.prepareOpeningGlow(strength: activationGlowStrength)
 
@@ -751,21 +756,21 @@ final class NotchPanelController {
 
     private func frame(on screen: NSScreen) -> NSRect {
         let size = windowSize
-        let x = screen.frame.midX - (size.width / 2)
+        let x = centeredX(for: size.width, on: screen)
         let y = screen.frame.maxY - visibleWindowSize.height
 
         return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 
     private func activationFrame(on screen: NSScreen) -> NSRect {
-        let x = screen.frame.midX - (activationPanelSize.width / 2)
+        let x = centeredX(for: activationPanelSize.width, on: screen)
         let y = screen.frame.maxY - activationPanelSize.height
 
         return NSRect(origin: CGPoint(x: x, y: y), size: activationPanelSize)
     }
 
     private func activationHoverFrame(on screen: NSScreen) -> NSRect {
-        let x = screen.frame.midX - (activationHitSize.width / 2)
+        let x = centeredX(for: activationHitSize.width, on: screen)
         let y = screen.frame.maxY - activationHitSize.height
 
         return NSRect(origin: CGPoint(x: x, y: y), size: activationHitSize)
@@ -777,7 +782,7 @@ final class NotchPanelController {
 
     private func activationClickFrame(on screen: NSScreen) -> NSRect {
         let size = activationClickSize(on: screen)
-        let x = screen.frame.midX - (size.width / 2)
+        let x = centeredX(for: size.width, on: screen)
         let y = screen.frame.maxY - size.height
 
         return NSRect(origin: CGPoint(x: x, y: y), size: size)
@@ -786,7 +791,7 @@ final class NotchPanelController {
     private func topEdgePushScreen(at mouseLocation: NSPoint) -> NSScreen? {
         NSScreen.screens.first { screen in
             let size = topEdgePushSize(on: screen)
-            let x = screen.frame.midX - (size.width / 2)
+            let x = centeredX(for: size.width, on: screen)
             let topCenterXRange = x...(x + size.width)
 
             return topCenterXRange.contains(mouseLocation.x)
@@ -814,7 +819,68 @@ final class NotchPanelController {
     }
 
     private func shouldHideClosedNotch(on screen: NSScreen) -> Bool {
+        actualShouldHideClosedNotch(on: screen) || shouldSimulateNotchlessDisplay(on: screen)
+    }
+
+    private func actualShouldHideClosedNotch(on screen: NSScreen) -> Bool {
         (screen.auxiliaryTopLeftArea?.isEmpty ?? true) && (screen.auxiliaryTopRightArea?.isEmpty ?? true)
+    }
+
+    private func centeredX(for width: CGFloat, on screen: NSScreen) -> CGFloat {
+        let centeredX = screen.frame.midX - (width / 2)
+
+        return centeredX + debugNotchlessSimulationOffset(on: screen, surfaceWidth: width)
+    }
+
+    private func debugNotchlessSimulationOffset(on screen: NSScreen, surfaceWidth: CGFloat) -> CGFloat {
+        #if DEBUG
+        guard shouldSimulateNotchlessDisplay(on: screen) else {
+            return 0
+        }
+
+        let desiredOffset = -(closedNotchSize(on: screen).width + 56)
+        let minimumX = screen.frame.minX + 24
+        let centeredX = screen.frame.midX - (surfaceWidth / 2)
+
+        return max(desiredOffset, minimumX - centeredX)
+        #else
+        return 0
+        #endif
+    }
+
+    private func shouldSimulateNotchlessDisplay(on screen: NSScreen) -> Bool {
+        #if DEBUG
+        appearanceSettings.debugSimulateNotchlessOnNotchedDisplays && !actualShouldHideClosedNotch(on: screen)
+        #else
+        false
+        #endif
+    }
+
+    private func observeDebugSettings() {
+        #if DEBUG
+        appearanceSettings.$debugSimulateNotchlessOnNotchedDisplays
+            .dropFirst()
+            .sink { [weak self] _ in
+                guard let self else {
+                    return
+                }
+
+                self.rebuildActivationPanels()
+
+                guard let panel, panel.isVisible else {
+                    return
+                }
+
+                let screen = self.activeScreen()
+                let closedNotchSize = self.closedNotchSize(on: screen)
+                self.animationModel.updateDisplayConfiguration(
+                    hideClosedNotch: self.shouldHideClosedNotch(on: screen),
+                    closedNotchSize: closedNotchSize
+                )
+                panel.setFrame(self.frame(on: screen), display: true)
+            }
+            .store(in: &settingsCancellables)
+        #endif
     }
 }
 
@@ -878,6 +944,11 @@ final class NotchAnimationModel: ObservableObject {
     }
 
     func updateClosedNotchSize(_ closedNotchSize: CGSize) {
+        self.closedNotchSize = closedNotchSize
+    }
+
+    func updateDisplayConfiguration(hideClosedNotch: Bool, closedNotchSize: CGSize) {
+        self.hideClosedNotch = hideClosedNotch
         self.closedNotchSize = closedNotchSize
     }
 

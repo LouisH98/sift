@@ -70,7 +70,7 @@ struct NotchActivationView: View {
     let size: CGSize
     let usesTopEdgeLine: Bool
 
-    private let topEdgeNotchHeight: CGFloat = 24
+    private let topEdgeLineHeight: CGFloat = 5
 
     private var glowStrength: CGFloat {
         guard appearanceSettings.isGlowEnabled else {
@@ -88,7 +88,7 @@ struct NotchActivationView: View {
     }
 
     private var activationSize: CGSize {
-        usesTopEdgeLine ? CGSize(width: notchSize.width, height: topEdgeNotchHeight) : notchSize
+        usesTopEdgeLine ? CGSize(width: notchSize.width, height: topEdgeLineHeight) : notchSize
     }
 
     private var feedbackProgress: CGFloat {
@@ -97,8 +97,8 @@ struct NotchActivationView: View {
 
     private var feedbackSize: CGSize {
         CGSize(
-            width: activationSize.width + (feedbackProgress * (usesTopEdgeLine ? 56 : 22)),
-            height: activationSize.height + (feedbackProgress * (usesTopEdgeLine ? 8 : 9))
+            width: activationSize.width + (feedbackProgress * (usesTopEdgeLine ? 82 : 22)),
+            height: activationSize.height + (feedbackProgress * (usesTopEdgeLine ? 20 : 9))
         )
     }
 
@@ -128,46 +128,15 @@ struct NotchActivationView: View {
     @ViewBuilder
     private var notchSurface: some View {
         if usesTopEdgeLine {
-            TopEdgeNotchShape(topShoulderRadius: 7, bottomCornerRadius: 15)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.18, green: 0.42, blue: 1.0),
-                            appearanceSettings.glowColor,
-                            Color(red: 0.76, green: 0.34, blue: 1.0)
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .opacity(min(0.92, surfaceOpacity * 1.08))
+            Capsule()
+                .fill(.clear)
                 .frame(width: feedbackSize.width, height: feedbackSize.height)
-                .overlay {
-                    TopEdgeNotchShape(topShoulderRadius: 7, bottomCornerRadius: 15)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    .white.opacity(0.42),
-                                    .white.opacity(0.08),
-                                    .clear
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .opacity(surfaceOpacity)
-                }
                 .overlay {
                     TopEdgeLineProcessingEffect(
                         state: processor.notchProcessingState,
                         metalGlowColor: appearanceSettings.nsGlowColor
                     )
-                    .frame(width: feedbackSize.width + 12, height: feedbackSize.height + 8)
-                    .offset(y: -1)
                 }
-                .shadow(color: .black.opacity(surfaceOpacity * 0.34), radius: 8, x: 0, y: 2)
-                .shadow(color: appearanceSettings.glowColor.opacity(glowStrength * 0.30), radius: 18 + (glowStrength * 16), x: 0, y: 8)
-                .shadow(color: appearanceSettings.glowColor.opacity(glowStrength * 0.16), radius: 34 + (glowStrength * 18), x: 0, y: 16)
                 .animation(.smooth(duration: 0.12), value: model.isHovered)
                 .animation(.smooth(duration: 0.08), value: model.isPressed)
                 .animation(.smooth(duration: 0.14), value: model.activationProgress)
@@ -198,63 +167,6 @@ struct NotchActivationView: View {
                 .animation(.smooth(duration: 0.14), value: model.activationProgress)
                 .animation(.smooth(duration: 0.28), value: processor.notchProcessingState.isDistilling)
         }
-    }
-}
-
-private struct TopEdgeNotchShape: Shape {
-    private var topShoulderRadius: CGFloat
-    private var bottomCornerRadius: CGFloat
-
-    init(topShoulderRadius: CGFloat, bottomCornerRadius: CGFloat) {
-        self.topShoulderRadius = topShoulderRadius
-        self.bottomCornerRadius = bottomCornerRadius
-    }
-
-    var animatableData: AnimatablePair<CGFloat, CGFloat> {
-        get {
-            .init(topShoulderRadius, bottomCornerRadius)
-        }
-        set {
-            topShoulderRadius = newValue.first
-            bottomCornerRadius = newValue.second
-        }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-
-        guard rect.width > 0, rect.height > 0 else {
-            return path
-        }
-
-        let topShoulderRadius = min(topShoulderRadius, rect.width * 0.08, rect.height * 0.38)
-        let topInset = topShoulderRadius * 1.65
-        let bottomCornerRadius = min(bottomCornerRadius, rect.width * 0.5, rect.height * 0.58)
-
-        path.move(to: CGPoint(x: rect.minX + topInset, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX - topInset, y: rect.minY))
-        path.addQuadCurve(
-            to: CGPoint(x: rect.maxX, y: rect.minY + topShoulderRadius),
-            control: CGPoint(x: rect.maxX, y: rect.minY)
-        )
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottomCornerRadius))
-        path.addQuadCurve(
-            to: CGPoint(x: rect.maxX - bottomCornerRadius, y: rect.maxY),
-            control: CGPoint(x: rect.maxX, y: rect.maxY)
-        )
-        path.addLine(to: CGPoint(x: rect.minX + bottomCornerRadius, y: rect.maxY))
-        path.addQuadCurve(
-            to: CGPoint(x: rect.minX, y: rect.maxY - bottomCornerRadius),
-            control: CGPoint(x: rect.minX, y: rect.maxY)
-        )
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + topShoulderRadius))
-        path.addQuadCurve(
-            to: CGPoint(x: rect.minX + topInset, y: rect.minY),
-            control: CGPoint(x: rect.minX, y: rect.minY)
-        )
-        path.closeSubpath()
-
-        return path
     }
 }
 

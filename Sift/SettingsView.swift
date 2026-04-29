@@ -45,6 +45,19 @@ struct SettingsView: View {
                 }
             }
 
+            #if DEBUG
+            Section("Debug") {
+                Toggle(
+                    "Simulate notchless display notch",
+                    isOn: $appearanceSettings.debugSimulateNotchlessOnNotchedDisplays
+                )
+
+                Text("On notched displays, renders the notchless display effect left of the hardware notch.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            #endif
+
             Section("Startup") {
                 Toggle("Open Sift at login", isOn: Binding(
                     get: { launchAtLoginStatus == .enabled },
