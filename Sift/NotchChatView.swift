@@ -6,6 +6,8 @@ struct NotchChatView: View {
     @ObservedObject var chatModel: ThoughtChatModel
     @ObservedObject private var settings = AISettings.shared
     @State private var transcriptScrollCommand: ChatTranscriptScrollCommand?
+    @State private var selectedProposedActionID: UUID?
+    @State private var selectedProposedActionChoice: ProposedActionChoice = .confirm
 
     let onCancel: () -> Void
     let onPageDelta: (Int) -> Void
@@ -23,35 +25,13 @@ struct NotchChatView: View {
                     .lineLimit(2)
             }
 
-            HStack(alignment: .center, spacing: 8) {
-                ChatInputView(
-                    text: $chatModel.draft,
-                    placeholder: "Ask about your thoughts",
-                    isEnabled: !chatModel.isAsking,
-                    onSubmit: ask,
-                    onCancel: onCancel,
-                    onPageDelta: onPageDelta,
-                    onTranscriptScroll: scrollTranscript
-                )
-                .frame(height: 30)
-
-                Button {
-                    ask()
-                } label: {
-                    Image(systemName: chatModel.isAsking ? "hourglass" : "arrow.up.circle.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                        .symbolRenderingMode(.hierarchical)
-                }
-                .frame(width: 28, height: 30)
-                .contentShape(Rectangle())
-                .buttonStyle(.plain)
-                .foregroundStyle(chatModel.canSend ? .white.opacity(0.88) : .white.opacity(0.28))
-                .disabled(!chatModel.canSend)
-                .help("Ask")
-            }
+            composer
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .foregroundStyle(.white)
+        .onChange(of: pendingProposedActionIDs) { _, _ in
+            ensureSelectedProposedAction()
+        }
     }
 
     private var header: some View {
@@ -84,13 +64,7 @@ struct NotchChatView: View {
                         ForEach(chatModel.messages) { message in
                             ChatMessageRow(
                                 message: message,
-                                isLoading: chatModel.isAsking && message.id == chatModel.messages.last?.id,
-                                onConfirmAction: { actionID in
-                                    chatModel.confirmProposedAction(actionID, in: message.id, store: store)
-                                },
-                                onCancelAction: { actionID in
-                                    chatModel.cancelProposedAction(actionID, in: message.id)
-                                }
+                                isLoading: chatModel.isAsking && message.id == chatModel.messages.last?.id
                             )
                                 .id(message.id)
                         }
@@ -107,6 +81,54 @@ struct NotchChatView: View {
             .layoutPriority(1)
             .onChange(of: chatModel.messages) { _, messages in
                 scrollToBottom(messages: messages, proxy: proxy)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var composer: some View {
+        if let pendingAction = selectedProposedAction {
+            ProposedActionComposer(
+                action: pendingAction.action,
+                currentIndex: selectedProposedActionIndex + 1,
+                count: pendingProposedActions.count,
+                selectedChoice: selectedProposedActionChoice,
+                onConfirm: {
+                    chatModel.confirmProposedAction(pendingAction.action.id, in: pendingAction.messageID, store: store)
+                },
+                onCancel: {
+                    chatModel.cancelProposedAction(pendingAction.action.id, in: pendingAction.messageID)
+                },
+                onMoveAction: moveSelectedProposedAction,
+                onMoveChoice: moveSelectedProposedActionChoice
+            )
+            .frame(minHeight: 42)
+        } else {
+            HStack(alignment: .center, spacing: 8) {
+                ChatInputView(
+                    text: $chatModel.draft,
+                    placeholder: "Ask about your thoughts",
+                    isEnabled: !chatModel.isAsking,
+                    onSubmit: ask,
+                    onCancel: onCancel,
+                    onPageDelta: onPageDelta,
+                    onTranscriptScroll: scrollTranscript
+                )
+                .frame(height: 30)
+
+                Button {
+                    ask()
+                } label: {
+                    Image(systemName: chatModel.isAsking ? "hourglass" : "arrow.up.circle.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .frame(width: 28, height: 30)
+                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .foregroundStyle(chatModel.canSend ? .white.opacity(0.88) : .white.opacity(0.28))
+                .disabled(!chatModel.canSend)
+                .help("Ask")
             }
         }
     }
@@ -142,13 +164,80 @@ struct NotchChatView: View {
     private func scrollTranscript(_ delta: Int) {
         transcriptScrollCommand = ChatTranscriptScrollCommand(delta: delta)
     }
+
+    private var pendingProposedActions: [PendingProposedChatAction] {
+        chatModel.messages.flatMap { message in
+            message.proposedActions
+                .filter { $0.status == .pending }
+                .map { PendingProposedChatAction(messageID: message.id, action: $0) }
+        }
+    }
+
+    private var pendingProposedActionIDs: [UUID] {
+        pendingProposedActions.map(\.id)
+    }
+
+    private var selectedProposedAction: PendingProposedChatAction? {
+        let actions = pendingProposedActions
+        guard !actions.isEmpty else {
+            return nil
+        }
+
+        if let selectedProposedActionID,
+           let action = actions.first(where: { $0.id == selectedProposedActionID }) {
+            return action
+        }
+
+        return actions[0]
+    }
+
+    private var selectedProposedActionIndex: Int {
+        guard let selectedProposedAction else {
+            return 0
+        }
+
+        return pendingProposedActions.firstIndex(where: { $0.id == selectedProposedAction.id }) ?? 0
+    }
+
+    private func ensureSelectedProposedAction() {
+        let actions = pendingProposedActions
+        guard !actions.isEmpty else {
+            selectedProposedActionID = nil
+            return
+        }
+
+        if let selectedProposedActionID,
+           actions.contains(where: { $0.id == selectedProposedActionID }) {
+            return
+        }
+
+        selectedProposedActionID = actions[0].id
+        selectedProposedActionChoice = .confirm
+    }
+
+    private func moveSelectedProposedAction(_ delta: Int) {
+        let actions = pendingProposedActions
+        guard !actions.isEmpty else {
+            selectedProposedActionID = nil
+            return
+        }
+
+        let currentIndex = selectedProposedActionID.flatMap { id in
+            actions.firstIndex { $0.id == id }
+        } ?? 0
+        let nextIndex = min(max(currentIndex + delta, 0), actions.count - 1)
+        selectedProposedActionID = actions[nextIndex].id
+        selectedProposedActionChoice = .confirm
+    }
+
+    private func moveSelectedProposedActionChoice(_ delta: Int) {
+        selectedProposedActionChoice = selectedProposedActionChoice.moved(delta)
+    }
 }
 
 private struct ChatMessageRow: View {
     let message: ThoughtChatMessage
     let isLoading: Bool
-    let onConfirmAction: (UUID) -> Void
-    let onCancelAction: (UUID) -> Void
 
     private var isUser: Bool {
         message.role == .user
@@ -165,12 +254,7 @@ private struct ChatMessageRow: View {
                     Spacer(minLength: 72)
                 }
 
-                Text(displayText)
-                    .font(.system(size: isUser ? 12 : 12.5, weight: isUser ? .medium : .regular))
-                    .foregroundStyle(isUser ? .white.opacity(0.92) : .white.opacity(0.86))
-                    .multilineTextAlignment(isUser ? .trailing : .leading)
-                    .lineLimit(nil)
-                    .fixedSize(horizontal: false, vertical: true)
+                messageContent
                     .padding(.vertical, 6)
                     .padding(.horizontal, 8)
                     .background {
@@ -187,13 +271,6 @@ private struct ChatMessageRow: View {
                 }
             }
 
-            if !message.proposedActions.isEmpty {
-                ProposedActionList(
-                    actions: message.proposedActions,
-                    onConfirm: onConfirmAction,
-                    onCancel: onCancelAction
-                )
-            }
         }
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     }
@@ -205,122 +282,302 @@ private struct ChatMessageRow: View {
 
         return message.text
     }
+
+    @ViewBuilder
+    private var messageContent: some View {
+        if isUser || displayText == "Thinking..." {
+            Text(displayText)
+                .font(.system(size: isUser ? 12 : 12.5, weight: isUser ? .medium : .regular))
+                .foregroundStyle(isUser ? .white.opacity(0.92) : .white.opacity(0.86))
+                .multilineTextAlignment(isUser ? .trailing : .leading)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            MarkdownDocumentView(markdown: displayText, style: .chat)
+                .multilineTextAlignment(.leading)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 }
 
-private struct ProposedActionList: View {
-    let actions: [ThoughtChatProposedAction]
-    let onConfirm: (UUID) -> Void
-    let onCancel: (UUID) -> Void
+private struct PendingProposedChatAction: Identifiable, Equatable {
+    let messageID: UUID
+    let action: ThoughtChatProposedAction
+
+    var id: UUID {
+        action.id
+    }
+}
+
+private enum ProposedActionChoice {
+    case confirm
+    case cancel
+
+    func moved(_ delta: Int) -> ProposedActionChoice {
+        guard delta != 0 else {
+            return self
+        }
+
+        switch self {
+        case .confirm:
+            return delta > 0 ? .cancel : .confirm
+        case .cancel:
+            return delta < 0 ? .confirm : .cancel
+        }
+    }
+}
+
+private struct ProposedActionComposer: View {
+    let action: ThoughtChatProposedAction
+    let currentIndex: Int
+    let count: Int
+    let selectedChoice: ProposedActionChoice
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+    let onMoveAction: (Int) -> Void
+    let onMoveChoice: (Int) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            ForEach(actions) { action in
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 5) {
-                        Image(systemName: iconName(for: action))
-                            .font(.system(size: 10, weight: .semibold))
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: iconName(for: action))
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 18)
 
-                        Text(title(for: action))
-                            .font(.caption2.weight(.semibold))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(title(for: action))
+                        .font(.caption2.weight(.semibold))
 
-                        Spacer(minLength: 8)
-                    }
-
-                    Text(action.text)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.72))
-                        .lineLimit(3)
-
-                    if !action.reason.isEmpty {
-                        Text(action.reason)
-                            .font(.caption2)
+                    if count > 1 {
+                        Text("\(currentIndex)/\(count)")
+                            .font(.caption2.weight(.medium))
                             .foregroundStyle(.white.opacity(0.42))
-                            .lineLimit(2)
-                    }
-
-                    if action.status == .pending {
-                        HStack(spacing: 6) {
-                            Button {
-                                onConfirm(action.id)
-                            } label: {
-                                Label("Confirm", systemImage: "checkmark")
-                                    .font(.caption2.weight(.semibold))
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.vertical, 4)
-                            .padding(.horizontal, 7)
-                            .background {
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .fill(.white.opacity(0.13))
-                            }
-
-                            Button {
-                                onCancel(action.id)
-                            } label: {
-                                Label("Cancel", systemImage: "xmark")
-                                    .font(.caption2.weight(.semibold))
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.white.opacity(0.58))
-                        }
                     }
                 }
-                .foregroundStyle(.white.opacity(0.82))
-                .frame(maxWidth: 230, alignment: .leading)
-                .padding(.vertical, 6)
-                .padding(.horizontal, 8)
-                .background {
+
+                Text(action.text)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                onConfirm()
+            } label: {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .frame(width: 26, height: 26)
+            .buttonStyle(.plain)
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(selectedChoice == .confirm ? .white.opacity(0.18) : .white.opacity(0.09))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(.white.opacity(selectedChoice == .confirm ? 0.32 : 0), lineWidth: 1)
+                    }
+            }
+            .help("Confirm")
+
+            Button {
+                onCancel()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .frame(width: 24, height: 26)
+            .buttonStyle(.plain)
+            .foregroundStyle(selectedChoice == .cancel ? .white.opacity(0.82) : .white.opacity(0.58))
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(selectedChoice == .cancel ? .white.opacity(0.1) : .clear)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(.white.opacity(selectedChoice == .cancel ? 0.24 : 0), lineWidth: 1)
+                    }
+            }
+            .help("Cancel")
+        }
+        .foregroundStyle(.white.opacity(0.82))
+        .padding(.vertical, 7)
+        .padding(.horizontal, 8)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.white.opacity(0.08))
+                .overlay {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(.white.opacity(0.07))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(.white.opacity(0.1), lineWidth: 1)
-                        }
+                        .strokeBorder(.white.opacity(0.14), lineWidth: 1)
                 }
+        }
+        .background(
+            ProposedActionKeyboardBridge(
+                onActivate: selectedChoice == .confirm ? onConfirm : onCancel,
+                onCancel: onCancel,
+                onMoveAction: onMoveAction,
+                onMoveChoice: onMoveChoice
+            )
+        )
+    }
+
+    private func title(for action: ThoughtChatProposedAction) -> String {
+        switch action.kind {
+        case .addThought:
+            switch action.status {
+            case .pending:
+                return "Add thought?"
+            case .confirmed:
+                return "Thought added"
+            case .canceled:
+                return "Canceled"
+            }
+        case .completeAction:
+            switch action.status {
+            case .pending:
+                return "Complete todo?"
+            case .confirmed:
+                return "Todo completed"
+            case .canceled:
+                return "Canceled"
             }
         }
     }
 
-    private func title(for action: ThoughtChatProposedAction) -> String {
-        switch action.status {
-        case .pending:
-            return "Add thought?"
-        case .confirmed:
-            return "Thought added"
-        case .canceled:
-            return "Canceled"
+    private func iconName(for action: ThoughtChatProposedAction) -> String {
+        switch action.kind {
+        case .addThought:
+            switch action.status {
+            case .pending:
+                return "plus.circle"
+            case .confirmed:
+                return "checkmark.circle"
+            case .canceled:
+                return "xmark.circle"
+            }
+        case .completeAction:
+            switch action.status {
+            case .pending:
+                return "checkmark.circle"
+            case .confirmed:
+                return "checkmark.circle.fill"
+            case .canceled:
+                return "xmark.circle"
+            }
         }
     }
+}
 
-    private func iconName(for action: ThoughtChatProposedAction) -> String {
-        switch action.status {
-        case .pending:
-            return "plus.circle"
-        case .confirmed:
-            return "checkmark.circle"
-        case .canceled:
-            return "xmark.circle"
+private struct ProposedActionKeyboardBridge: NSViewRepresentable {
+    let onActivate: () -> Void
+    let onCancel: () -> Void
+    let onMoveAction: (Int) -> Void
+    let onMoveChoice: (Int) -> Void
+
+    func makeNSView(context: Context) -> ProposedActionKeyView {
+        let view = ProposedActionKeyView()
+        view.onActivate = onActivate
+        view.onCancel = onCancel
+        view.onMoveAction = onMoveAction
+        view.onMoveChoice = onMoveChoice
+        return view
+    }
+
+    func updateNSView(_ view: ProposedActionKeyView, context: Context) {
+        view.onActivate = onActivate
+        view.onCancel = onCancel
+        view.onMoveAction = onMoveAction
+        view.onMoveChoice = onMoveChoice
+
+        DispatchQueue.main.async {
+            guard let window = view.window, window.firstResponder !== view else {
+                return
+            }
+
+            window.makeFirstResponder(view)
         }
+    }
+}
+
+private final class ProposedActionKeyView: NSView {
+    var onActivate: (() -> Void)?
+    var onCancel: (() -> Void)?
+    var onMoveAction: ((Int) -> Void)?
+    var onMoveChoice: ((Int) -> Void)?
+
+    override var acceptsFirstResponder: Bool {
+        true
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+
+        if modifiers.isEmpty {
+            switch event.keyCode {
+            case 36, 76:
+                onActivate?()
+                return
+            case 53:
+                onCancel?()
+                return
+            case 123:
+                onMoveChoice?(-1)
+                return
+            case 124:
+                onMoveChoice?(1)
+                return
+            case 126:
+                onMoveAction?(-1)
+                return
+            case 125:
+                onMoveAction?(1)
+                return
+            default:
+                break
+            }
+        }
+
+        super.keyDown(with: event)
     }
 }
 
 private struct SourceStrip: View {
     let sources: [ThoughtChatSource]
 
+    @State private var visibleSourceIDs: Set<UUID> = []
+
     var body: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 6) {
-                ForEach(sources.prefix(6)) { source in
-                    sourceCard(source)
+                ForEach(Array(displayedSources.enumerated()), id: \.element.id) { index, source in
+                    sourceCard(source, at: index)
                 }
             }
         }
         .scrollIndicators(.hidden)
+        .onAppear {
+            revealDisplayedSources()
+        }
+        .onChange(of: displayedSourceIDs) { _, _ in
+            visibleSourceIDs.formIntersection(displayedSourceIDs)
+            revealDisplayedSources()
+        }
+    }
+
+    private var displayedSources: [ThoughtChatSource] {
+        Array(sources.prefix(6))
+    }
+
+    private var displayedSourceIDs: Set<UUID> {
+        Set(displayedSources.map(\.id))
     }
 
     @ViewBuilder
-    private func sourceCard(_ source: ThoughtChatSource) -> some View {
+    private func sourceCard(_ source: ThoughtChatSource, at index: Int) -> some View {
         let card = SourceCard(source: source)
+            .sourceCardEntrance(isVisible: visibleSourceIDs.contains(source.id), index: index)
+
         if let url = source.url {
             Link(destination: url) {
                 card
@@ -328,6 +585,12 @@ private struct SourceStrip: View {
             .buttonStyle(.plain)
         } else {
             card
+        }
+    }
+
+    private func revealDisplayedSources() {
+        for source in displayedSources where !visibleSourceIDs.contains(source.id) {
+            visibleSourceIDs.insert(source.id)
         }
     }
 }
@@ -352,7 +615,7 @@ private struct SourceCard: View {
                 .lineLimit(2)
         }
         .foregroundStyle(.white.opacity(0.58))
-        .frame(width: 138, alignment: .leading)
+        .frame(width: 138, height: 46, alignment: .leading)
         .padding(.vertical, 5)
         .padding(.horizontal, 7)
         .background {
@@ -376,6 +639,28 @@ private struct SourceCard: View {
         case .web:
             return "globe"
         }
+    }
+}
+
+private struct SourceCardEntranceModifier: ViewModifier {
+    let isVisible: Bool
+    let index: Int
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isVisible ? 1 : 0)
+            .blur(radius: isVisible ? 0 : 8)
+            .offset(x: isVisible ? 0 : 24)
+            .animation(
+                .smooth(duration: 0.28).delay(Double(index) * 0.045),
+                value: isVisible
+            )
+    }
+}
+
+private extension View {
+    func sourceCardEntrance(isVisible: Bool, index: Int) -> some View {
+        modifier(SourceCardEntranceModifier(isVisible: isVisible, index: index))
     }
 }
 

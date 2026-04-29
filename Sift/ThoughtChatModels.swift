@@ -87,6 +87,7 @@ struct ThoughtChatSource: Identifiable, Hashable {
 struct ThoughtChatProposedAction: Identifiable, Equatable {
     enum Kind: String, Equatable {
         case addThought
+        case completeAction
     }
 
     enum Status: String, Equatable {
@@ -99,6 +100,7 @@ struct ThoughtChatProposedAction: Identifiable, Equatable {
     let kind: Kind
     let text: String
     let reason: String
+    var targetActionID: UUID? = nil
     var status: Status
 }
 
@@ -210,10 +212,15 @@ final class ThoughtChatModel: ObservableObject {
         case .addThought:
             let thought = store.addThought(action.text)
             ThoughtProcessor.shared.enqueue(thought)
+        case .completeAction:
+            guard let targetActionID = action.targetActionID else {
+                return
+            }
+            store.setActionItemDone(targetActionID, isDone: true)
         }
 
         messages[messageIndex].proposedActions[actionIndex].status = .confirmed
-        messages.append(ThoughtChatMessage(role: .assistant, text: "Added that as a new thought."))
+        messages.append(ThoughtChatMessage(role: .assistant, text: confirmationText(for: action)))
     }
 
     func cancelProposedAction(_ actionID: UUID, in messageID: UUID) {
@@ -242,5 +249,14 @@ final class ThoughtChatModel: ObservableObject {
         messages[index].text = text
         messages[index].sources = sources
         messages[index].proposedActions = proposedActions
+    }
+
+    private func confirmationText(for action: ThoughtChatProposedAction) -> String {
+        switch action.kind {
+        case .addThought:
+            return "Added that as a new thought."
+        case .completeAction:
+            return "Marked that todo complete."
+        }
     }
 }

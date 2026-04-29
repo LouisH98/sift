@@ -100,17 +100,9 @@ struct ThoughtChatService {
             continuation.yield(.proposedActions(proposedActions))
         }
 
-        let shouldSeedLocalSources = shouldSeedInitialLocalSources(for: question, history: history)
-        let initialMatches = shouldSeedLocalSources ? Array(retriever.sources(for: question, store: store).prefix(8)) : []
-        if !initialMatches.isEmpty {
-            appendUnique(initialMatches, to: &collectedSources)
-            publishSources()
-        }
-
         let result = try await client.run(
             question: question,
             history: history,
-            initialLocalSources: initialMatches,
             maxToolRounds: maxAgentToolRounds,
             runTool: { call in
                 switch call.name {
@@ -137,6 +129,59 @@ struct ThoughtChatService {
                     }
 
                     return noteContextPayload(id: id, kind: kind, store: store)
+
+                case "search_actions":
+                    let arguments = SearchActionsArguments(json: call.arguments)
+                    let limit = min(max(arguments.limit ?? 8, 1), 20)
+                    let matches = searchActions(
+                        query: arguments.query,
+                        status: arguments.status,
+                        due: arguments.due,
+                        limit: limit,
+                        store: store
+                    )
+                    let sources = matches.map { actionSource($0, store: store) }
+                    promoteUnique(sources, in: &collectedSources)
+                    publishSources()
+                    return jsonString([
+                        "results": matches.map { actionPayload($0, store: store) }
+                    ])
+
+                case "propose_complete_action":
+                    let arguments = CompleteActionArguments(json: call.arguments)
+                    guard let actionID = UUID(uuidString: arguments.actionItemID),
+                          let item = store.actionItems.first(where: { $0.id == actionID }) else {
+                        return jsonString(["error": "Todo not found."])
+                    }
+
+                    guard !item.isDone else {
+                        return jsonString(["status": "already_done", "message": "That todo is already complete."])
+                    }
+
+                    let action = ThoughtChatProposedAction(
+                        id: UUID(),
+                        kind: .completeAction,
+                        text: item.title,
+                        reason: arguments.reason.trimmingCharacters(in: .whitespacesAndNewlines),
+                        targetActionID: item.id,
+                        status: .pending
+                    )
+                    proposedActions.append(action)
+                    publishActions()
+                    return jsonString([
+                        "actionId": action.id.uuidString,
+                        "status": "pending_user_confirmation",
+                        "message": "The user must confirm before this todo is marked complete."
+                    ])
+
+                case "get_page_tree":
+                    return pageTreePayload(store: store)
+
+                case "get_recent_activity":
+                    let arguments = RecentActivityArguments(json: call.arguments)
+                    let days = min(max(arguments.days ?? 7, 1), 90)
+                    let limit = min(max(arguments.limit ?? 12, 1), 30)
+                    return recentActivityPayload(days: days, limit: limit, store: store)
 
                 case "propose_add_thought":
                     let arguments = AddThoughtArguments(json: call.arguments)
@@ -258,19 +303,6 @@ struct ThoughtChatService {
         return lines.isEmpty ? "None" : lines.joined(separator: "\n")
     }
 
-    private func shouldSeedInitialLocalSources(for question: String, history: [ThoughtChatMessage]) -> Bool {
-        let trimmedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        let userMessages = history.filter { message in
-            message.role == .user && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-
-        guard userMessages.count == 1 else {
-            return false
-        }
-
-        return userMessages.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) == trimmedQuestion
-    }
-
     private func truncate(_ value: String, maxLength: Int) -> String {
         guard value.count > maxLength else {
             return value
@@ -328,6 +360,251 @@ struct ThoughtChatService {
             "date": source.date.map(DateFormatter.chatContextDate.string(from:)) ?? "",
             "url": source.url?.absoluteString ?? ""
         ]
+    }
+
+    @MainActor
+    private func searchActions(
+        query: String,
+        status: String,
+        due: String,
+        limit: Int,
+        store: ThoughtStore
+    ) -> [ActionItem] {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let tokens = normalizedQuery
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+
+        return store.actionItems
+            .filter { item in
+                actionMatchesStatus(item, status: status)
+                    && actionMatchesDue(item, due: due)
+                    && actionMatchesQuery(item, tokens: tokens, store: store)
+            }
+            .sorted(by: actionSearchSort)
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    private func actionMatchesStatus(_ item: ActionItem, status: String) -> Bool {
+        switch status {
+        case "open":
+            return !item.isDone
+        case "done":
+            return item.isDone
+        default:
+            return true
+        }
+    }
+
+    private func actionMatchesDue(_ item: ActionItem, due: String) -> Bool {
+        let calendar = Calendar.current
+        let now = Date()
+        let today = calendar.startOfDay(for: now)
+
+        switch due {
+        case "overdue":
+            return !item.isDone && item.isDueOverdue
+        case "today":
+            guard let dueDate = item.dueDate else {
+                return false
+            }
+            return calendar.isDate(dueDate, inSameDayAs: today)
+        case "upcoming":
+            guard let dueAt = item.sortDueAt else {
+                return false
+            }
+            return dueAt >= now
+        case "noDue":
+            return item.dueDate == nil
+        default:
+            return true
+        }
+    }
+
+    @MainActor
+    private func actionMatchesQuery(_ item: ActionItem, tokens: [String], store: ThoughtStore) -> Bool {
+        guard !tokens.isEmpty else {
+            return true
+        }
+
+        let thought = store.thought(with: item.thoughtID)
+        let page = store.page(with: item.themeID)
+        let haystack = [
+            item.title,
+            item.detail ?? "",
+            thought?.text ?? "",
+            thought?.distilled ?? "",
+            page?.title ?? "",
+            page?.summary ?? ""
+        ]
+            .joined(separator: " ")
+            .lowercased()
+
+        return tokens.allSatisfy { haystack.contains($0) }
+    }
+
+    private func actionSearchSort(_ lhs: ActionItem, _ rhs: ActionItem) -> Bool {
+        if lhs.isDone != rhs.isDone {
+            return !lhs.isDone
+        }
+
+        switch (lhs.sortDueAt, rhs.sortDueAt) {
+        case let (lhsDue?, rhsDue?) where lhsDue != rhsDue:
+            return lhsDue < rhsDue
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        default:
+            return lhs.createdAt > rhs.createdAt
+        }
+    }
+
+    @MainActor
+    private func actionSource(_ item: ActionItem, store: ThoughtStore) -> ThoughtChatSource {
+        ThoughtChatSource(
+            id: item.id,
+            kind: .actionItem,
+            title: item.title,
+            snippet: actionSnippet(item, store: store),
+            date: item.dueDate ?? item.createdAt,
+            score: item.isDone ? 0.7 : 1
+        )
+    }
+
+    @MainActor
+    private func actionSnippet(_ item: ActionItem, store: ThoughtStore) -> String {
+        var parts: [String] = []
+        if let detail = item.detail, !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(detail)
+        }
+        if let dueDate = item.dueDate {
+            let due = [DateFormatter.chatContextDate.string(from: dueDate), item.dueTime].compactMap { $0 }.joined(separator: " ")
+            parts.append("Due \(due)")
+        }
+        if let page = store.page(with: item.themeID) {
+            parts.append("Page: \(page.title)")
+        }
+        return parts.isEmpty ? (item.isDone ? "Completed todo" : "Open todo") : parts.joined(separator: " · ")
+    }
+
+    @MainActor
+    private func actionPayload(_ item: ActionItem, store: ThoughtStore) -> [String: Any] {
+        let thought = store.thought(with: item.thoughtID)
+        let page = store.page(with: item.themeID)
+        return [
+            "id": item.id.uuidString,
+            "kind": "actionItem",
+            "title": item.title,
+            "detail": item.detail ?? "",
+            "status": item.isDone ? "done" : "open",
+            "createdAt": DateFormatter.chatContextDate.string(from: item.createdAt),
+            "completedAt": item.completedAt.map(DateFormatter.chatContextDate.string(from:)) ?? "",
+            "dueDate": item.dueDate.map(DateFormatter.chatContextDate.string(from:)) ?? "",
+            "dueTime": item.dueTime ?? "",
+            "page": [
+                "id": page?.id.uuidString ?? "",
+                "title": page?.title ?? ""
+            ],
+            "linkedThought": [
+                "id": thought?.id.uuidString ?? "",
+                "title": thought?.title ?? "",
+                "rawText": thought.map { truncate($0.text, maxLength: 500) } ?? ""
+            ]
+        ]
+    }
+
+    @MainActor
+    private func pageTreePayload(store: ThoughtStore) -> String {
+        let childrenByParent = Dictionary(grouping: store.pages, by: \.parentID)
+
+        func payload(for page: ThoughtPage, depth: Int) -> [String: Any] {
+            let children = (childrenByParent[page.id] ?? []).sorted(by: pageTreeSort)
+            return [
+                "id": page.id.uuidString,
+                "parentId": page.parentID?.uuidString ?? "",
+                "title": page.title,
+                "summary": page.summary,
+                "tags": page.tags,
+                "thoughtCount": page.thoughtIDs.count,
+                "updatedAt": DateFormatter.chatContextDate.string(from: page.updatedAt),
+                "isStale": page.isStale,
+                "depth": depth,
+                "children": children.map { payload(for: $0, depth: depth + 1) }
+            ]
+        }
+
+        let roots = (childrenByParent[nil] ?? []).sorted(by: pageTreeSort)
+        return jsonString([
+            "pages": roots.map { payload(for: $0, depth: 0) }
+        ])
+    }
+
+    private func pageTreeSort(_ lhs: ThoughtPage, _ rhs: ThoughtPage) -> Bool {
+        lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+
+    @MainActor
+    private func recentActivityPayload(days: Int, limit: Int, store: ThoughtStore) -> String {
+        let calendar = Calendar.current
+        let since = calendar.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+
+        let recentThoughts = store.thoughts
+            .filter { $0.createdAt >= since }
+            .sorted { $0.createdAt > $1.createdAt }
+            .prefix(limit)
+            .map { thought in
+                [
+                    "id": thought.id.uuidString,
+                    "title": thought.title ?? "",
+                    "rawText": truncate(thought.text, maxLength: 500),
+                    "createdAt": DateFormatter.chatContextDate.string(from: thought.createdAt),
+                    "pageId": thought.pageID?.uuidString ?? ""
+                ]
+            }
+
+        let updatedPages = store.pages
+            .filter { $0.updatedAt >= since }
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .prefix(limit)
+            .map { page in
+                [
+                    "id": page.id.uuidString,
+                    "title": page.title,
+                    "summary": page.summary,
+                    "updatedAt": DateFormatter.chatContextDate.string(from: page.updatedAt),
+                    "thoughtCount": page.thoughtIDs.count
+                ] as [String: Any]
+            }
+
+        let createdActions = store.actionItems
+            .filter { $0.createdAt >= since }
+            .sorted { $0.createdAt > $1.createdAt }
+            .prefix(limit)
+            .map { actionPayload($0, store: store) }
+
+        let completedActions = store.actionItems
+            .filter { item in
+                guard let completedAt = item.completedAt else {
+                    return false
+                }
+                return completedAt >= since
+            }
+            .sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
+            .prefix(limit)
+            .map { actionPayload($0, store: store) }
+
+        return jsonString([
+            "window": [
+                "days": days,
+                "since": DateFormatter.chatContextDate.string(from: since)
+            ],
+            "thoughts": Array(recentThoughts),
+            "updatedPages": Array(updatedPages),
+            "createdActions": Array(createdActions),
+            "completedActions": Array(completedActions)
+        ])
     }
 
     @MainActor
@@ -449,6 +726,43 @@ private struct NoteContextArguments {
     }
 }
 
+private struct SearchActionsArguments {
+    let query: String
+    let status: String
+    let due: String
+    let limit: Int?
+
+    init(json: String) {
+        let object = Self.object(from: json)
+        query = object["query"] as? String ?? ""
+        status = object["status"] as? String ?? "all"
+        due = object["due"] as? String ?? "all"
+        limit = object["limit"] as? Int
+    }
+}
+
+private struct CompleteActionArguments {
+    let actionItemID: String
+    let reason: String
+
+    init(json: String) {
+        let object = Self.object(from: json)
+        actionItemID = object["actionItemID"] as? String ?? ""
+        reason = object["reason"] as? String ?? ""
+    }
+}
+
+private struct RecentActivityArguments {
+    let days: Int?
+    let limit: Int?
+
+    init(json: String) {
+        let object = Self.object(from: json)
+        days = object["days"] as? Int
+        limit = object["limit"] as? Int
+    }
+}
+
 private struct AddThoughtArguments {
     let text: String
     let reason: String
@@ -472,6 +786,24 @@ private extension SearchNotesArguments {
 }
 
 private extension NoteContextArguments {
+    static func object(from json: String) -> [String: Any] {
+        SearchNotesArguments.object(from: json)
+    }
+}
+
+private extension SearchActionsArguments {
+    static func object(from json: String) -> [String: Any] {
+        SearchNotesArguments.object(from: json)
+    }
+}
+
+private extension CompleteActionArguments {
+    static func object(from json: String) -> [String: Any] {
+        SearchNotesArguments.object(from: json)
+    }
+}
+
+private extension RecentActivityArguments {
     static func object(from json: String) -> [String: Any] {
         SearchNotesArguments.object(from: json)
     }
@@ -507,11 +839,10 @@ private struct OpenAIResponsesAgentClient {
     func run(
         question: String,
         history: [ThoughtChatMessage],
-        initialLocalSources: [ThoughtChatSource],
         maxToolRounds: Int,
         runTool: @escaping (AgentToolCall) async -> String
     ) async throws -> OpenAIResponsesAgentResult {
-        var input = initialInput(question: question, history: history, initialLocalSources: initialLocalSources)
+        var input = initialInput(question: question, history: history)
         var previousResponseID: String?
         var latestText = ""
         var webSources: [ThoughtChatSource] = []
@@ -580,8 +911,7 @@ private struct OpenAIResponsesAgentClient {
 
     private func initialInput(
         question: String,
-        history: [ThoughtChatMessage],
-        initialLocalSources: [ThoughtChatSource]
+        history: [ThoughtChatMessage]
     ) -> [[String: Any]] {
         var priorMessages = history
             .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -604,9 +934,6 @@ private struct OpenAIResponsesAgentClient {
         Recent chat:
         \(transcript.isEmpty ? "None" : transcript)
 
-        Initial local Sift search results:
-        \(initialLocalContext(from: initialLocalSources))
-
         Current user request:
         \(question)
         """
@@ -624,34 +951,17 @@ private struct OpenAIResponsesAgentClient {
         ]
     }
 
-    private func initialLocalContext(from sources: [ThoughtChatSource]) -> String {
-        guard !sources.isEmpty else {
-            return "None. You should still call search_notes with a focused query before saying the notebook has no answer."
-        }
-
-        return sources.prefix(8)
-            .map { source in
-                """
-                - kind: \(source.kind.rawValue)
-                  id: \(source.id.uuidString)
-                  title: \(source.displayTitle)
-                  date: \(source.date.map(DateFormatter.chatContextDate.string(from:)) ?? "")
-                  snippet: \(source.snippet)
-                """
-            }
-            .joined(separator: "\n")
-    }
-
     private var agentInstructions: String {
         """
         You are Sift's agentic chat assistant for a private thought notebook.
         Default assumption: the user is asking about their saved Sift thoughts, pages, and todos.
-        Before answering any question about people, pets, dates, obligations, plans, preferences, memories, notes, or todos, call search_notes with a focused query and use those results.
-        If initial local search results are present, use them and fetch full context for important results before answering.
+        Before answering any question about people, pets, dates, obligations, plans, preferences, memories, notes, or todos, call the most relevant local tool and use those results.
+        Use search_notes for general notebook questions, search_actions for todos, get_page_tree for notebook structure, and get_recent_activity for recent work.
         Do not give generic advice when local Sift results answer the question.
         Use web search only when the user explicitly asks for current, external, or public information; do not use web search for private names, pets, todos, or notebook questions.
         Never claim a new thought has been saved unless the tool result says it is pending user confirmation or the user has confirmed it.
         If the user wants to capture a new thought, call propose_add_thought with the exact thought text and a short reason.
+        If the user wants to complete a todo, call propose_complete_action. Do not mark todos complete without user confirmation.
         Be concise, preserve uncertainty, and do not expose raw tool JSON.
         """
     }
@@ -686,7 +996,7 @@ private struct OpenAIResponsesAgentClient {
             [
                 "type": "function",
                 "name": "get_note_context",
-                "description": "Fetch full local context for a Sift thought or notebook page by UUID. Read-only.",
+                "description": "Fetch full local context for a Sift thought, notebook page, or todo/action item by UUID. Read-only.",
                 "parameters": [
                     "type": "object",
                     "properties": [
@@ -701,6 +1011,93 @@ private struct OpenAIResponsesAgentClient {
                         ]
                     ],
                     "required": ["id", "kind"],
+                    "additionalProperties": false
+                ]
+            ],
+            [
+                "type": "function",
+                "name": "search_actions",
+                "description": "Search local Sift todos/action items by text, status, and due timing. Read-only.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "query": [
+                            "type": "string",
+                            "description": "Optional natural-language query. Use an empty string to list by status or due timing."
+                        ],
+                        "status": [
+                            "type": "string",
+                            "enum": ["all", "open", "done"],
+                            "description": "Todo completion status to include."
+                        ],
+                        "due": [
+                            "type": "string",
+                            "enum": ["all", "overdue", "today", "upcoming", "noDue"],
+                            "description": "Due date filter."
+                        ],
+                        "limit": [
+                            "type": "integer",
+                            "description": "Maximum number of todos to return.",
+                            "minimum": 1,
+                            "maximum": 20
+                        ]
+                    ],
+                    "required": ["query", "status", "due", "limit"],
+                    "additionalProperties": false
+                ]
+            ],
+            [
+                "type": "function",
+                "name": "propose_complete_action",
+                "description": "Prepare marking a todo/action item complete for user confirmation. This does not complete it by itself.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "actionItemID": [
+                            "type": "string",
+                            "description": "Todo/action item UUID."
+                        ],
+                        "reason": [
+                            "type": "string",
+                            "description": "Short reason this todo appears to be the one the user wants completed."
+                        ]
+                    ],
+                    "required": ["actionItemID", "reason"],
+                    "additionalProperties": false
+                ]
+            ],
+            [
+                "type": "function",
+                "name": "get_page_tree",
+                "description": "Fetch the local Sift notebook page hierarchy with page IDs, summaries, tags, and thought counts. Read-only.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [:],
+                    "required": [],
+                    "additionalProperties": false
+                ]
+            ],
+            [
+                "type": "function",
+                "name": "get_recent_activity",
+                "description": "Fetch recent local Sift activity including new thoughts, updated pages, created todos, and completed todos. Read-only.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "days": [
+                            "type": "integer",
+                            "description": "Lookback window in days.",
+                            "minimum": 1,
+                            "maximum": 90
+                        ],
+                        "limit": [
+                            "type": "integer",
+                            "description": "Maximum number of items per activity category.",
+                            "minimum": 1,
+                            "maximum": 30
+                        ]
+                    ],
+                    "required": ["days", "limit"],
                     "additionalProperties": false
                 ]
             ],
