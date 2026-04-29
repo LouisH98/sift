@@ -312,6 +312,34 @@ enum ThoughtPrefixParser {
         return String(text[bodyStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    static func todoDirectiveBody(in text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return ""
+        }
+
+        if todoHint(in: trimmed) != nil {
+            return strippingTodoPrefixes(in: todoBody(in: trimmed))
+        }
+
+        guard let colonIndex = trimmed.firstIndex(of: ":") else {
+            return trimmed
+        }
+
+        let prefix = trimmed[..<colonIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isValidThemePrefix(prefix) else {
+            return trimmed
+        }
+
+        let bodyStart = trimmed.index(after: colonIndex)
+        let body = String(trimmed[bodyStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard todoHint(in: body) != nil else {
+            return trimmed
+        }
+
+        return strippingTodoPrefixes(in: body)
+    }
+
     private static func todoPrefixEnd(in text: String) -> String.Index? {
         guard text.first == "!" else {
             return nil
@@ -322,6 +350,20 @@ enum ThoughtPrefixParser {
             index = text.index(after: index)
         }
         return index
+    }
+
+    private static func strippingTodoPrefixes(in text: String) -> String {
+        var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        while let contentStart = todoPrefixEnd(in: result) {
+            let stripped = String(result[contentStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard stripped != result else {
+                break
+            }
+            result = stripped
+        }
+
+        return result
     }
 
     private static func isValidThemePrefix(_ prefix: String) -> Bool {

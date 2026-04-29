@@ -418,19 +418,20 @@ final class ThoughtProcessor: ObservableObject {
 
     private func cleanForcedTodoTitle(_ title: String, originalThought: Thought) -> String {
         let cleanedTitle = clean(title)
-        let rawBody = ThoughtPrefixParser.todoBody(in: originalThought.text)
+        let rawBody = ThoughtPrefixParser.todoDirectiveBody(in: originalThought.text)
         guard !cleanedTitle.isEmpty else {
             return clean(rawBody)
         }
 
-        if ThoughtPrefixParser.todoHint(in: cleanedTitle) != nil {
-            let strippedTitle = ThoughtPrefixParser.todoBody(in: cleanedTitle)
+        let directiveStrippedTitle = ThoughtPrefixParser.todoDirectiveBody(in: cleanedTitle)
+        if directiveStrippedTitle != cleanedTitle {
+            let strippedTitle = directiveStrippedTitle
             return clean(strippedTitle).isEmpty ? clean(rawBody) : clean(strippedTitle)
         }
 
         if let themeHint = originalThought.themeHint,
            cleanedTitle.lowercased().hasPrefix("\(themeHint.lowercased()):") {
-            let strippedTitle = ThoughtPrefixParser.todoBody(in: cleanedTitle)
+            let strippedTitle = ThoughtPrefixParser.todoDirectiveBody(in: ThoughtPrefixParser.todoBody(in: cleanedTitle))
             return clean(strippedTitle).isEmpty ? clean(rawBody) : clean(strippedTitle)
         }
 
@@ -524,7 +525,7 @@ final class ThoughtProcessor: ObservableObject {
         now: Date
     ) -> [ActionItem] {
         output.actionItems.compactMap { action in
-            let title = clean(action.title)
+            let title = clean(ThoughtPrefixParser.todoDirectiveBody(in: action.title))
             guard !title.isEmpty else {
                 return nil
             }

@@ -653,11 +653,11 @@ struct AppleFoundationModelsProvider: ThoughtAIProvider {
             return clean(fallback)
         }
 
-        guard ThoughtPrefixParser.todoHint(in: cleanedTitle) != nil else {
+        let strippedTitle = ThoughtPrefixParser.todoDirectiveBody(in: cleanedTitle)
+        guard strippedTitle != cleanedTitle else {
             return cleanedTitle
         }
 
-        let strippedTitle = ThoughtPrefixParser.todoBody(in: cleanedTitle)
         return clean(strippedTitle).isEmpty ? clean(fallback) : clean(strippedTitle)
     }
 
