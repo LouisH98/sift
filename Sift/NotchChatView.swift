@@ -6,6 +6,7 @@ struct NotchChatView: View {
     @ObservedObject var chatModel: ThoughtChatModel
     @ObservedObject private var settings = AISettings.shared
     @State private var transcriptScrollCommand: ChatTranscriptScrollCommand?
+    @State private var transcriptContentHeight: CGFloat = 0
     @State private var selectedProposedActionID: UUID?
     @State private var selectedProposedActionChoice: ProposedActionChoice = .confirm
 
@@ -72,15 +73,36 @@ struct NotchChatView: View {
                 }
                 .padding(.trailing, 4)
                 .background(
+                    GeometryReader { geometry in
+                        Color.clear
+                            .preference(key: ChatTranscriptContentHeightKey.self, value: geometry.size.height)
+                    }
+                )
+                .background(
                     ChatTranscriptScrollBridge(command: transcriptScrollCommand)
                         .frame(width: 0, height: 0)
                 )
+                .id(ChatTranscriptAnchor.content)
+
+                Color.clear
+                    .frame(height: 1)
+                    .id(ChatTranscriptAnchor.bottom)
             }
             .scrollIndicators(.hidden)
             .frame(maxHeight: .infinity, alignment: .top)
             .layoutPriority(1)
             .onChange(of: chatModel.messages) { _, messages in
                 scrollToBottom(messages: messages, proxy: proxy)
+            }
+            .onPreferenceChange(ChatTranscriptContentHeightKey.self) { height in
+                let didGrow = height > transcriptContentHeight
+                transcriptContentHeight = height
+
+                guard didGrow, chatModel.isAsking, !chatModel.messages.isEmpty else {
+                    return
+                }
+
+                scrollToBottom(proxy: proxy, animated: false)
             }
         }
     }
@@ -150,13 +172,21 @@ struct NotchChatView: View {
     }
 
     private func scrollToBottom(messages: [ThoughtChatMessage], proxy: ScrollViewProxy) {
-        guard let id = messages.last?.id else {
+        guard !messages.isEmpty else {
             return
         }
 
+        scrollToBottom(proxy: proxy)
+    }
+
+    private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool = true) {
         DispatchQueue.main.async {
-            withAnimation(.smooth(duration: 0.16)) {
-                proxy.scrollTo(id, anchor: .bottom)
+            if animated {
+                withAnimation(.smooth(duration: 0.16)) {
+                    proxy.scrollTo(ChatTranscriptAnchor.bottom, anchor: .bottom)
+                }
+            } else {
+                proxy.scrollTo(ChatTranscriptAnchor.bottom, anchor: .bottom)
             }
         }
     }
@@ -232,6 +262,19 @@ struct NotchChatView: View {
 
     private func moveSelectedProposedActionChoice(_ delta: Int) {
         selectedProposedActionChoice = selectedProposedActionChoice.moved(delta)
+    }
+}
+
+private enum ChatTranscriptAnchor {
+    static let content = "chat-transcript-content"
+    static let bottom = "chat-transcript-bottom"
+}
+
+private struct ChatTranscriptContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
