@@ -82,7 +82,16 @@ struct NotchChatView: View {
                         emptyState
                     } else {
                         ForEach(chatModel.messages) { message in
-                            ChatMessageRow(message: message, isLoading: chatModel.isAsking && message.id == chatModel.messages.last?.id)
+                            ChatMessageRow(
+                                message: message,
+                                isLoading: chatModel.isAsking && message.id == chatModel.messages.last?.id,
+                                onConfirmAction: { actionID in
+                                    chatModel.confirmProposedAction(actionID, in: message.id, store: store)
+                                },
+                                onCancelAction: { actionID in
+                                    chatModel.cancelProposedAction(actionID, in: message.id)
+                                }
+                            )
                                 .id(message.id)
                         }
                     }
@@ -138,6 +147,8 @@ struct NotchChatView: View {
 private struct ChatMessageRow: View {
     let message: ThoughtChatMessage
     let isLoading: Bool
+    let onConfirmAction: (UUID) -> Void
+    let onCancelAction: (UUID) -> Void
 
     private var isUser: Bool {
         message.role == .user
@@ -175,6 +186,14 @@ private struct ChatMessageRow: View {
                     Spacer(minLength: 72)
                 }
             }
+
+            if !message.proposedActions.isEmpty {
+                ProposedActionList(
+                    actions: message.proposedActions,
+                    onConfirm: onConfirmAction,
+                    onCancel: onCancelAction
+                )
+            }
         }
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     }
@@ -188,6 +207,103 @@ private struct ChatMessageRow: View {
     }
 }
 
+private struct ProposedActionList: View {
+    let actions: [ThoughtChatProposedAction]
+    let onConfirm: (UUID) -> Void
+    let onCancel: (UUID) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(actions) { action in
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 5) {
+                        Image(systemName: iconName(for: action))
+                            .font(.system(size: 10, weight: .semibold))
+
+                        Text(title(for: action))
+                            .font(.caption2.weight(.semibold))
+
+                        Spacer(minLength: 8)
+                    }
+
+                    Text(action.text)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(3)
+
+                    if !action.reason.isEmpty {
+                        Text(action.reason)
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.42))
+                            .lineLimit(2)
+                    }
+
+                    if action.status == .pending {
+                        HStack(spacing: 6) {
+                            Button {
+                                onConfirm(action.id)
+                            } label: {
+                                Label("Confirm", systemImage: "checkmark")
+                                    .font(.caption2.weight(.semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 7)
+                            .background {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(.white.opacity(0.13))
+                            }
+
+                            Button {
+                                onCancel(action.id)
+                            } label: {
+                                Label("Cancel", systemImage: "xmark")
+                                    .font(.caption2.weight(.semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.white.opacity(0.58))
+                        }
+                    }
+                }
+                .foregroundStyle(.white.opacity(0.82))
+                .frame(maxWidth: 230, alignment: .leading)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(.white.opacity(0.07))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(.white.opacity(0.1), lineWidth: 1)
+                        }
+                }
+            }
+        }
+    }
+
+    private func title(for action: ThoughtChatProposedAction) -> String {
+        switch action.status {
+        case .pending:
+            return "Add thought?"
+        case .confirmed:
+            return "Thought added"
+        case .canceled:
+            return "Canceled"
+        }
+    }
+
+    private func iconName(for action: ThoughtChatProposedAction) -> String {
+        switch action.status {
+        case .pending:
+            return "plus.circle"
+        case .confirmed:
+            return "checkmark.circle"
+        case .canceled:
+            return "xmark.circle"
+        }
+    }
+}
+
 private struct SourceStrip: View {
     let sources: [ThoughtChatSource]
 
@@ -195,37 +311,71 @@ private struct SourceStrip: View {
         ScrollView(.horizontal) {
             HStack(spacing: 6) {
                 ForEach(sources.prefix(6)) { source in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 4) {
-                            Image(systemName: source.kind == .thought ? "text.bubble" : "doc.text")
-                                .font(.system(size: 9, weight: .semibold))
-
-                            Text(source.displayTitle)
-                                .font(.caption2.weight(.semibold))
-                                .lineLimit(1)
-                        }
-
-                        Text(source.snippet)
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.42))
-                            .lineLimit(2)
-                    }
-                    .foregroundStyle(.white.opacity(0.58))
-                    .frame(width: 138, alignment: .leading)
-                    .padding(.vertical, 5)
-                    .padding(.horizontal, 7)
-                    .background {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(.white.opacity(0.055))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .strokeBorder(.white.opacity(0.08), lineWidth: 1)
-                            }
-                    }
+                    sourceCard(source)
                 }
             }
         }
         .scrollIndicators(.hidden)
+    }
+
+    @ViewBuilder
+    private func sourceCard(_ source: ThoughtChatSource) -> some View {
+        let card = SourceCard(source: source)
+        if let url = source.url {
+            Link(destination: url) {
+                card
+            }
+            .buttonStyle(.plain)
+        } else {
+            card
+        }
+    }
+}
+
+private struct SourceCard: View {
+    let source: ThoughtChatSource
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Image(systemName: iconName)
+                    .font(.system(size: 9, weight: .semibold))
+
+                Text(source.displayTitle)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+            }
+
+            Text(source.snippet)
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.42))
+                .lineLimit(2)
+        }
+        .foregroundStyle(.white.opacity(0.58))
+        .frame(width: 138, alignment: .leading)
+        .padding(.vertical, 5)
+        .padding(.horizontal, 7)
+        .background {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(.white.opacity(0.055))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+                }
+        }
+    }
+
+    private var iconName: String {
+        switch source.kind {
+        case .thought:
+            return "text.bubble"
+        case .page:
+            return "doc.text"
+        case .actionItem:
+            return "checklist"
+        case .web:
+            return "globe"
+        }
     }
 }
 

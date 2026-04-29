@@ -79,6 +79,7 @@ final class ThoughtStore: ObservableObject {
 
         thoughts.insert(thought, at: 0)
         saveThoughts()
+        ThoughtEmbeddingIndex.shared.upsertThought(thought, store: self)
         return thought
     }
 
@@ -110,6 +111,7 @@ final class ThoughtStore: ObservableObject {
         thoughts[index] = thought
         thoughts.sort { $0.createdAt > $1.createdAt }
         saveThoughts()
+        ThoughtEmbeddingIndex.shared.upsertThought(thought, store: self)
     }
 
     func markProcessingFailed(thoughtID: UUID, error: String) {
@@ -160,6 +162,8 @@ final class ThoughtStore: ObservableObject {
 
         pages.sort(by: pageSort)
         savePages()
+        ThoughtEmbeddingIndex.shared.upsertPage(page)
+        reindexThoughts(page.thoughtIDs)
     }
 
     func updatePageSynthesis(pageID: UUID, synthesisMarkdown: String, sourceHash: String, synthesizedAt: Date = Date()) {
@@ -173,6 +177,7 @@ final class ThoughtStore: ObservableObject {
         pages[index].isStale = false
         pages[index].updatedAt = synthesizedAt
         savePages()
+        ThoughtEmbeddingIndex.shared.upsertPage(pages[index])
     }
 
     func movePage(_ id: UUID, to parentID: UUID?) {
@@ -189,6 +194,7 @@ final class ThoughtStore: ObservableObject {
         pages[index].isStale = true
         pages.sort(by: pageSort)
         savePages()
+        ThoughtEmbeddingIndex.shared.upsertPage(pages[index])
     }
 
     func renamePage(_ id: UUID, title: String) {
@@ -201,6 +207,8 @@ final class ThoughtStore: ObservableObject {
         pages[index].updatedAt = Date()
         pages[index].isStale = true
         savePages()
+        ThoughtEmbeddingIndex.shared.upsertPage(pages[index])
+        reindexThoughts(pages[index].thoughtIDs)
     }
 
     func deletePage(_ id: UUID) {
@@ -217,6 +225,7 @@ final class ThoughtStore: ObservableObject {
             .flatMap(\.thoughtIDs)
 
         pages.removeAll { removedIDs.contains($0.id) }
+        ThoughtEmbeddingIndex.shared.remove(kind: .page, ids: removedIDs)
         for thoughtID in orphanedThoughtIDs where !unsorted.thoughtIDs.contains(thoughtID) {
             unsorted.thoughtIDs.append(thoughtID)
         }
@@ -239,6 +248,9 @@ final class ThoughtStore: ObservableObject {
         saveThoughts()
         saveActionItems()
         savePages()
+        ThoughtEmbeddingIndex.shared.upsertPage(unsorted)
+        reindexThoughts(orphanedThoughtIDs)
+        reindexActionItems(actionItems.filter { orphanedThoughtIDs.contains($0.thoughtID) }.map(\.id))
 
             NSLog("Sift moved thoughts from deleted page \(deletedPage.title) to Unsorted.")
     }
@@ -254,6 +266,8 @@ final class ThoughtStore: ObservableObject {
 
         thoughts.removeAll { $0.id == id }
         actionItems.removeAll { $0.thoughtID == id }
+        ThoughtEmbeddingIndex.shared.remove(kind: .thought, id: id)
+        ThoughtEmbeddingIndex.shared.remove(kind: .actionItem, ids: removedActionItemIDs)
 
         var touchedPageIDs = Set<UUID>()
         for index in pages.indices where pages[index].thoughtIDs.contains(id) {
@@ -276,12 +290,14 @@ final class ThoughtStore: ObservableObject {
         if let pageID = deletedThought.pageID, !touchedPageIDs.contains(pageID), let index = pages.firstIndex(where: { $0.id == pageID }) {
             pages[index].isStale = true
             pages[index].updatedAt = Date()
+            touchedPageIDs.insert(pageID)
         }
 
         saveThoughts()
         saveActionItems()
         saveDailyDigests()
         savePages()
+        reindexPages(touchedPageIDs)
         ActionReminderScheduler.shared.cancel(actionItemIDs: removedActionItemIDs)
     }
 
@@ -371,6 +387,7 @@ final class ThoughtStore: ObservableObject {
         syncThoughtPageReferences()
         savePages()
         saveThoughts()
+        ThoughtEmbeddingIndex.shared.refreshAll(store: self)
     }
 
     func upsertDailyDigest(_ digest: DailyDigest) {
@@ -405,6 +422,7 @@ final class ThoughtStore: ObservableObject {
         actionItems = nextActionItems
         actionItems.sort(by: actionItemSort)
         saveActionItems()
+        reindexActionItems(items.map(\.id))
         ActionReminderScheduler.shared.sync(actionItems: items, settings: TodoSettings.shared)
     }
 
@@ -443,6 +461,9 @@ final class ThoughtStore: ObservableObject {
 
         actionItems.sort(by: actionItemSort)
         saveActionItems()
+        if let updatedItem = actionItems.first(where: { $0.id == id }) {
+            ThoughtEmbeddingIndex.shared.upsertActionItem(updatedItem, store: self)
+        }
 
         if isDone {
             ActionReminderScheduler.shared.cancel(actionItemIDs: [id])
@@ -477,6 +498,7 @@ final class ThoughtStore: ObservableObject {
         backfillThoughtPrefixHintsIfNeeded()
         backfillPageColorsIfNeeded()
         syncThoughtPageReferences()
+        ThoughtEmbeddingIndex.shared.refreshAll(store: self)
     }
 
     private func loadArray<T: Decodable>(from url: URL, fallback: [T]) -> [T] {
@@ -662,6 +684,36 @@ final class ThoughtStore: ObservableObject {
             pages[index] = page
         } else {
             pages.append(page)
+        }
+    }
+
+    private func reindexThoughts(_ ids: some Sequence<UUID>) {
+        for id in ids {
+            guard let thought = thought(with: id) else {
+                continue
+            }
+
+            ThoughtEmbeddingIndex.shared.upsertThought(thought, store: self)
+        }
+    }
+
+    private func reindexPages(_ ids: some Sequence<UUID>) {
+        for id in ids {
+            guard let page = page(with: id) else {
+                continue
+            }
+
+            ThoughtEmbeddingIndex.shared.upsertPage(page)
+        }
+    }
+
+    private func reindexActionItems(_ ids: some Sequence<UUID>) {
+        for id in ids {
+            guard let item = actionItems.first(where: { $0.id == id }) else {
+                continue
+            }
+
+            ThoughtEmbeddingIndex.shared.upsertActionItem(item, store: self)
         }
     }
 

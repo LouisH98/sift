@@ -7,6 +7,7 @@ struct SettingsView: View {
     @StateObject private var todoSettings = TodoSettings.shared
     @StateObject private var appearanceSettings = NotchAppearanceSettings.shared
     @StateObject private var processor = ThoughtProcessor.shared
+    @StateObject private var embeddingIndex = ThoughtEmbeddingIndex.shared
     @ObservedObject private var store = ThoughtStore.shared
     @State private var availableModels: [String] = []
     @State private var isLoadingModels = false
@@ -112,6 +113,10 @@ struct SettingsView: View {
                         .foregroundStyle(.red)
                 }
             }
+
+            Section("Semantic Search") {
+                semanticSearchSettings
+            }
         }
         .formStyle(.grouped)
         .padding()
@@ -176,6 +181,69 @@ struct SettingsView: View {
             get: { appearanceSettings.glowColor },
             set: { appearanceSettings.setGlowColor($0) }
         )
+    }
+
+    @ViewBuilder
+    private var semanticSearchSettings: some View {
+        let status = embeddingIndex.status(store: store)
+
+        VStack(alignment: .leading, spacing: 8) {
+            Label(
+                status.isAvailable ? "Apple sentence embeddings available" : "Apple sentence embeddings unavailable",
+                systemImage: status.isAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+            )
+            .foregroundStyle(status.isAvailable ? .green : .orange)
+
+            Text("Semantic search compares each query against a local persisted index of thoughts, pages, and todos.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Text("\(status.recordCount) of \(status.expectedRecordCount) indexed")
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                if status.missingRecordCount > 0, !status.isRebuilding {
+                    Text("\(status.missingRecordCount) missing")
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            if status.isRebuilding {
+                ProgressView(
+                    value: Double(status.rebuiltCount),
+                    total: Double(max(status.rebuildTotal, 1))
+                )
+
+                Text("Rebuilding \(status.rebuiltCount) of \(status.rebuildTotal)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Button(status.isRebuilding ? "Rebuilding..." : "Rebuild semantic index") {
+                    Task {
+                        await embeddingIndex.rebuildAll(store: store)
+                    }
+                }
+                .disabled(!status.isAvailable || status.isRebuilding)
+
+                Spacer()
+
+                if let lastRebuiltAt = status.lastRebuiltAt {
+                    Text("Last rebuilt \(DateFormatter.semanticIndexStatus.string(from: lastRebuiltAt))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let lastError = status.lastError {
+                Text(lastError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
     }
 
     @ViewBuilder
@@ -372,4 +440,13 @@ struct SettingsView: View {
             settings: todoSettings
         )
     }
+}
+
+private extension DateFormatter {
+    static let semanticIndexStatus: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter
+    }()
 }

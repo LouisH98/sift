@@ -11,6 +11,7 @@ struct ThoughtChatMessage: Identifiable, Equatable {
     let role: ThoughtChatRole
     var text: String
     var sources: [ThoughtChatSource]
+    var proposedActions: [ThoughtChatProposedAction]
     let createdAt: Date
 
     init(
@@ -18,12 +19,14 @@ struct ThoughtChatMessage: Identifiable, Equatable {
         role: ThoughtChatRole,
         text: String,
         sources: [ThoughtChatSource] = [],
+        proposedActions: [ThoughtChatProposedAction] = [],
         createdAt: Date = Date()
     ) {
         self.id = id
         self.role = role
         self.text = text
         self.sources = sources
+        self.proposedActions = proposedActions
         self.createdAt = createdAt
     }
 }
@@ -32,6 +35,8 @@ struct ThoughtChatSource: Identifiable, Hashable {
     enum Kind: String {
         case thought
         case page
+        case actionItem
+        case web
     }
 
     let id: UUID
@@ -40,20 +45,67 @@ struct ThoughtChatSource: Identifiable, Hashable {
     let snippet: String
     let date: Date?
     let score: Double
+    let url: URL?
+
+    init(
+        id: UUID = UUID(),
+        kind: Kind,
+        title: String,
+        snippet: String,
+        date: Date?,
+        score: Double,
+        url: URL? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.snippet = snippet
+        self.date = date
+        self.score = score
+        self.url = url
+    }
 
     var displayTitle: String {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else {
-            return kind == .thought ? "Thought" : "Page"
+            switch kind {
+            case .thought:
+                return "Thought"
+            case .page:
+                return "Page"
+            case .actionItem:
+                return "Todo"
+            case .web:
+                return "Web"
+            }
         }
 
         return trimmedTitle
     }
 }
 
+struct ThoughtChatProposedAction: Identifiable, Equatable {
+    enum Kind: String, Equatable {
+        case addThought
+    }
+
+    enum Status: String, Equatable {
+        case pending
+        case confirmed
+        case canceled
+    }
+
+    let id: UUID
+    let kind: Kind
+    let text: String
+    let reason: String
+    var status: Status
+}
+
 enum ThoughtChatUpdate {
     case partialAnswer(String)
     case finalSources([ThoughtChatSource])
+    case proposedActions([ThoughtChatProposedAction])
 }
 
 @MainActor
@@ -94,6 +146,7 @@ final class ThoughtChatModel: ObservableObject {
         activeTask = Task { [weak self, service] in
             var accumulatedText = ""
             var finalSources: [ThoughtChatSource] = []
+            var proposedActions: [ThoughtChatProposedAction] = []
 
             do {
                 for try await update in service.ask(question: question, history: history, store: store, settings: settings) {
@@ -104,10 +157,13 @@ final class ThoughtChatModel: ObservableObject {
                     switch update {
                     case .partialAnswer(let text):
                         accumulatedText = text
-                        self?.updateAssistantMessage(id: assistantID, text: text, sources: finalSources)
+                        self?.updateAssistantMessage(id: assistantID, text: text, sources: finalSources, proposedActions: proposedActions)
                     case .finalSources(let sources):
                         finalSources = sources
-                        self?.updateAssistantMessage(id: assistantID, text: accumulatedText, sources: sources)
+                        self?.updateAssistantMessage(id: assistantID, text: accumulatedText, sources: sources, proposedActions: proposedActions)
+                    case .proposedActions(let actions):
+                        proposedActions = actions
+                        self?.updateAssistantMessage(id: assistantID, text: accumulatedText, sources: finalSources, proposedActions: actions)
                     }
                 }
             } catch {
@@ -117,7 +173,7 @@ final class ThoughtChatModel: ObservableObject {
 
                 let fallbackSources = service.sources(for: question, store: store)
                 let fallbackText = accumulatedText.isEmpty ? "I could not answer from your thoughts right now." : accumulatedText
-                self?.updateAssistantMessage(id: assistantID, text: fallbackText, sources: fallbackSources)
+                self?.updateAssistantMessage(id: assistantID, text: fallbackText, sources: fallbackSources, proposedActions: proposedActions)
                 self?.errorMessage = error.localizedDescription
             }
 
@@ -139,12 +195,52 @@ final class ThoughtChatModel: ObservableObject {
         errorMessage = nil
     }
 
-    private func updateAssistantMessage(id: UUID, text: String, sources: [ThoughtChatSource]) {
+    func confirmProposedAction(_ actionID: UUID, in messageID: UUID, store: ThoughtStore) {
+        guard let messageIndex = messages.firstIndex(where: { $0.id == messageID }),
+              let actionIndex = messages[messageIndex].proposedActions.firstIndex(where: { $0.id == actionID }) else {
+            return
+        }
+
+        let action = messages[messageIndex].proposedActions[actionIndex]
+        guard action.status == .pending else {
+            return
+        }
+
+        switch action.kind {
+        case .addThought:
+            let thought = store.addThought(action.text)
+            ThoughtProcessor.shared.enqueue(thought)
+        }
+
+        messages[messageIndex].proposedActions[actionIndex].status = .confirmed
+        messages.append(ThoughtChatMessage(role: .assistant, text: "Added that as a new thought."))
+    }
+
+    func cancelProposedAction(_ actionID: UUID, in messageID: UUID) {
+        guard let messageIndex = messages.firstIndex(where: { $0.id == messageID }),
+              let actionIndex = messages[messageIndex].proposedActions.firstIndex(where: { $0.id == actionID }) else {
+            return
+        }
+
+        guard messages[messageIndex].proposedActions[actionIndex].status == .pending else {
+            return
+        }
+
+        messages[messageIndex].proposedActions[actionIndex].status = .canceled
+    }
+
+    private func updateAssistantMessage(
+        id: UUID,
+        text: String,
+        sources: [ThoughtChatSource],
+        proposedActions: [ThoughtChatProposedAction]
+    ) {
         guard let index = messages.firstIndex(where: { $0.id == id }) else {
             return
         }
 
         messages[index].text = text
         messages[index].sources = sources
+        messages[index].proposedActions = proposedActions
     }
 }

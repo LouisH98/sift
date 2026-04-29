@@ -3,12 +3,23 @@ import Foundation
 struct ThoughtContextRetriever {
     private let maxThoughts = 8
     private let maxPages = 5
+    private let maxActionItems = 8
     private let maxSnippetLength = 220
 
     nonisolated init() {}
 
     @MainActor
     func sources(for query: String, store: ThoughtStore) -> [ThoughtChatSource] {
+        var sources = lexicalSources(for: query, store: store)
+        if let semanticSources = semanticSources(for: query, store: store), !semanticSources.isEmpty {
+            appendUnique(semanticSources, to: &sources)
+        }
+
+        return sources.sorted(by: rankedBefore)
+    }
+
+    @MainActor
+    func lexicalSources(for query: String, store: ThoughtStore) -> [ThoughtChatSource] {
         let normalizedQuery = normalize(query)
         let queryTokens = tokens(in: normalizedQuery)
 
@@ -26,8 +37,69 @@ struct ThoughtContextRetriever {
             .sorted(by: rankedBefore)
             .prefix(maxPages)
 
-        return Array(thoughtSources + pageSources)
+        let actionItemSources = store.actionItems
+            .compactMap { actionItemSource(for: $0, query: normalizedQuery, queryTokens: queryTokens, store: store) }
             .sorted(by: rankedBefore)
+            .prefix(maxActionItems)
+
+        return Array(actionItemSources + thoughtSources + pageSources)
+            .sorted(by: rankedBefore)
+    }
+
+    @MainActor
+    func semanticSources(for query: String, store: ThoughtStore) -> [ThoughtChatSource]? {
+        ThoughtEmbeddingIndex.shared.search(
+            query: query,
+            store: store,
+            limit: maxThoughts + maxPages + maxActionItems
+        )
+    }
+
+    @MainActor
+    func source(id: UUID, kind: ThoughtChatSource.Kind, store: ThoughtStore) -> ThoughtChatSource? {
+        switch kind {
+        case .thought:
+            guard let thought = store.thought(with: id) else {
+                return nil
+            }
+
+            return ThoughtChatSource(
+                id: thought.id,
+                kind: .thought,
+                title: thought.title ?? thought.text,
+                snippet: bestSnippet(from: [thought.text, thought.distilled ?? "", thought.tags.joined(separator: " ")], queryTokens: []),
+                date: thought.createdAt,
+                score: 1
+            )
+        case .page:
+            guard let page = store.page(with: id) else {
+                return nil
+            }
+
+            return ThoughtChatSource(
+                id: page.id,
+                kind: .page,
+                title: page.title,
+                snippet: bestSnippet(from: [page.summary, page.synthesisMarkdown ?? "", page.bodyMarkdown], queryTokens: []),
+                date: page.updatedAt,
+                score: 1
+            )
+        case .actionItem:
+            guard let item = store.actionItems.first(where: { $0.id == id }) else {
+                return nil
+            }
+
+            return ThoughtChatSource(
+                id: item.id,
+                kind: .actionItem,
+                title: item.title,
+                snippet: actionItemSnippet(item),
+                date: item.dueDate ?? item.createdAt,
+                score: 1
+            )
+        case .web:
+            return nil
+        }
     }
 
     private func thoughtSource(
@@ -82,6 +154,37 @@ struct ThoughtContextRetriever {
             snippet: bestSnippet(from: [page.summary, page.synthesisMarkdown ?? "", page.bodyMarkdown], queryTokens: queryTokens),
             date: page.updatedAt,
             score: score + recencyBoost(for: page.updatedAt) * 0.35
+        )
+    }
+
+    private func actionItemSource(
+        for item: ActionItem,
+        query: String,
+        queryTokens: Set<String>,
+        store: ThoughtStore
+    ) -> ThoughtChatSource? {
+        let linkedThought = store.thought(with: item.thoughtID)
+        let weightedFields: [(text: String, weight: Double)] = [
+            (item.title, 6),
+            (item.detail ?? "", 4),
+            (actionItemDueText(item), 5),
+            (linkedThought?.title ?? "", 3),
+            (linkedThought?.text ?? "", 3),
+            (linkedThought?.distilled ?? "", 2)
+        ]
+
+        let score = relevanceScore(query: query, queryTokens: queryTokens, weightedFields: weightedFields)
+        guard score > 0 else {
+            return nil
+        }
+
+        return ThoughtChatSource(
+            id: item.id,
+            kind: .actionItem,
+            title: item.title,
+            snippet: actionItemSnippet(item),
+            date: item.dueDate ?? item.createdAt,
+            score: score + dueBoost(for: item)
         )
     }
 
@@ -156,6 +259,48 @@ struct ThoughtContextRetriever {
         return max(0, 2.5 - min(days, 365) / 146)
     }
 
+    private func dueBoost(for item: ActionItem) -> Double {
+        guard !item.isDone else {
+            return 0.2
+        }
+
+        guard let dueDate = item.dueDate else {
+            return 1.2
+        }
+
+        let age = abs(Date().timeIntervalSince(dueDate))
+        let days = age / 86_400
+        return max(0.5, 3 - min(days, 365) / 146)
+    }
+
+    private func actionItemSnippet(_ item: ActionItem) -> String {
+        cleanWhitespace([
+            item.isDone ? "Done" : "Open",
+            item.title,
+            item.detail ?? "",
+            actionItemDueText(item)
+        ].joined(separator: " "))
+    }
+
+    private func actionItemDueText(_ item: ActionItem) -> String {
+        guard let dueDate = item.dueDate else {
+            return "No due date"
+        }
+
+        let date = DateFormatter.chatDueDate.string(from: dueDate)
+        guard let dueTime = item.dueTime, !dueTime.isEmpty else {
+            return "Due \(date)"
+        }
+
+        return "Due \(date) at \(dueTime)"
+    }
+
+    private func appendUnique(_ newSources: [ThoughtChatSource], to sources: inout [ThoughtChatSource]) {
+        for source in newSources where !sources.contains(where: { $0.kind == source.kind && $0.id == source.id }) {
+            sources.append(source)
+        }
+    }
+
     private func normalize(_ value: String) -> String {
         cleanWhitespace(value)
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
@@ -193,4 +338,13 @@ struct ThoughtContextRetriever {
         "our", "that", "the", "their", "this", "to", "was", "we", "what",
         "when", "where", "which", "who", "why", "with", "you"
     ]
+}
+
+private extension DateFormatter {
+    static let chatDueDate: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
 }
