@@ -308,7 +308,7 @@ final class ThoughtProcessor: ObservableObject {
         - If todoDirective is forced by a leading ! prefix, create at least one actionItem and set classification to todo or both.
         - Treat a leading ! as a capture directive, not as part of action item titles, page titles, summaries, tags, or distilled prose.
         - Prefer an existing page when it fits.
-        - If themeHint is not None, strongly prefer a matching page title or create that page.
+        - If themeHint is not None, strongly prefer a matching page title or alias, or create that page.
         - If no page fits and the thought belongs in the notebook, return an empty pageId and a new pageTitle.
         - Set compatibility fields themeTitle/themeSummary to match pageTitle/pageSummary.
         - Use linkedThoughtIds only from Recent thoughts.
@@ -453,9 +453,11 @@ final class ThoughtProcessor: ObservableObject {
         let explicitPageID = UUID(uuidString: clean(output.pageId))
         let requestedTitle = clean(output.pageTitle).isEmpty ? clean(output.themeTitle) : clean(output.pageTitle)
         let hintedTitle = originalThought.themeHint.map(clean) ?? ""
-        let title = !hintedTitle.isEmpty ? hintedTitle : (requestedTitle.isEmpty ? "Unsorted" : requestedTitle)
+        let hintedPage = hintedTitle.isEmpty ? nil : store.pageMatchingPrefix(hintedTitle)
+        let title = hintedPage?.title ?? (!hintedTitle.isEmpty ? hintedTitle : (requestedTitle.isEmpty ? "Unsorted" : requestedTitle))
 
         let existingPage = explicitPageID.flatMap { store.page(with: $0) }
+            ?? hintedPage
             ?? store.pages.first { $0.title.localizedCaseInsensitiveCompare(title) == .orderedSame }
 
         let parentID = UUID(uuidString: clean(output.pageParentId))
@@ -772,7 +774,7 @@ final class ThoughtProcessor: ObservableObject {
     ) -> [String] {
         let indent = String(repeating: "  ", count: depth)
         var lines = [
-            "\(indent)- id: \(page.id.uuidString), parentId: \(page.parentID?.uuidString ?? "none"), title: \(page.title), summary: \(page.summary), tags: \(page.tags.joined(separator: ", "))"
+            "\(indent)- id: \(page.id.uuidString), parentId: \(page.parentID?.uuidString ?? "none"), title: \(page.title), aliases: \(page.aliases.joined(separator: ", ")), summary: \(page.summary), tags: \(page.tags.joined(separator: ", "))"
         ]
 
         let children = (childrenByParentID[page.id] ?? [])

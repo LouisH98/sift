@@ -548,6 +548,7 @@ struct ThoughtChatService {
                 "id": page.id.uuidString,
                 "parentId": page.parentID?.uuidString ?? "",
                 "title": page.title,
+                "aliases": page.aliases,
                 "summary": page.summary,
                 "tags": page.tags,
                 "thoughtCount": page.thoughtIDs.count,
@@ -595,6 +596,7 @@ struct ThoughtChatService {
                 [
                     "id": page.id.uuidString,
                     "title": page.title,
+                    "aliases": page.aliases,
                     "summary": page.summary,
                     "updatedAt": DateFormatter.chatContextDate.string(from: page.updatedAt),
                     "thoughtCount": page.thoughtIDs.count
@@ -670,6 +672,7 @@ struct ThoughtChatService {
                 "id": page.id.uuidString,
                 "kind": "page",
                 "title": page.title,
+                "aliases": page.aliases,
                 "summary": page.summary,
                 "bodyMarkdown": page.bodyMarkdown,
                 "synthesisMarkdown": page.synthesisMarkdown ?? "",

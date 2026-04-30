@@ -62,11 +62,83 @@ struct ThoughtPage: Codable, Identifiable, Hashable {
     var synthesizedAt: Date?
     var synthesisSourceHash: String?
     var tags: [String]
+    var aliases: [String]
     var thoughtIDs: [UUID]
     var colorHex: String?
     var createdAt: Date
     var updatedAt: Date
     var isStale: Bool
+
+    init(
+        id: UUID,
+        parentID: UUID?,
+        title: String,
+        summary: String,
+        bodyMarkdown: String,
+        synthesisMarkdown: String?,
+        synthesizedAt: Date?,
+        synthesisSourceHash: String?,
+        tags: [String],
+        aliases: [String] = [],
+        thoughtIDs: [UUID],
+        colorHex: String?,
+        createdAt: Date,
+        updatedAt: Date,
+        isStale: Bool
+    ) {
+        self.id = id
+        self.parentID = parentID
+        self.title = title
+        self.summary = summary
+        self.bodyMarkdown = bodyMarkdown
+        self.synthesisMarkdown = synthesisMarkdown
+        self.synthesizedAt = synthesizedAt
+        self.synthesisSourceHash = synthesisSourceHash
+        self.tags = tags
+        self.aliases = aliases
+        self.thoughtIDs = thoughtIDs
+        self.colorHex = colorHex
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.isStale = isStale
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case parentID
+        case title
+        case summary
+        case bodyMarkdown
+        case synthesisMarkdown
+        case synthesizedAt
+        case synthesisSourceHash
+        case tags
+        case aliases
+        case thoughtIDs
+        case colorHex
+        case createdAt
+        case updatedAt
+        case isStale
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        parentID = try container.decodeIfPresent(UUID.self, forKey: .parentID)
+        title = try container.decode(String.self, forKey: .title)
+        summary = try container.decode(String.self, forKey: .summary)
+        bodyMarkdown = try container.decode(String.self, forKey: .bodyMarkdown)
+        synthesisMarkdown = try container.decodeIfPresent(String.self, forKey: .synthesisMarkdown)
+        synthesizedAt = try container.decodeIfPresent(Date.self, forKey: .synthesizedAt)
+        synthesisSourceHash = try container.decodeIfPresent(String.self, forKey: .synthesisSourceHash)
+        tags = try container.decode([String].self, forKey: .tags)
+        aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
+        thoughtIDs = try container.decode([UUID].self, forKey: .thoughtIDs)
+        colorHex = try container.decodeIfPresent(String.self, forKey: .colorHex)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        isStale = try container.decode(Bool.self, forKey: .isStale)
+    }
 }
 
 struct Theme: Codable, Identifiable, Hashable {

@@ -137,6 +137,7 @@ final class ThoughtStore: ObservableObject {
     func upsertPage(_ page: ThoughtPage) {
         var page = page
         page.colorHex = page.colorHex ?? ThoughtCategoryColor.hex(for: page.title)
+        page.aliases = normalizedPageAliases(page.aliases, title: page.title)
 
         if let index = pages.firstIndex(where: { $0.id == page.id }) {
             let existingPage = pages[index]
@@ -203,12 +204,64 @@ final class ThoughtStore: ObservableObject {
             return
         }
 
+        let oldTitle = pages[index].title
         pages[index].title = cleanTitle
+        if normalizedPageAliasKey(oldTitle) != normalizedPageAliasKey(cleanTitle) {
+            pages[index].aliases.append(oldTitle)
+        }
+        pages[index].aliases = normalizedPageAliases(pages[index].aliases, title: cleanTitle)
         pages[index].updatedAt = Date()
         pages[index].isStale = true
+
+        var changedThoughts = false
+        for thoughtIndex in thoughts.indices where pages[index].thoughtIDs.contains(thoughts[thoughtIndex].id) {
+            if thoughts[thoughtIndex].category != cleanTitle {
+                thoughts[thoughtIndex].category = cleanTitle
+                changedThoughts = true
+            }
+        }
+
+        var changedThemes = false
+        for themeIndex in themes.indices where themes[themeIndex].id == id || themes[themeIndex].title.localizedCaseInsensitiveCompare(oldTitle) == .orderedSame {
+            if themes[themeIndex].title != cleanTitle {
+                themes[themeIndex].title = cleanTitle
+                themes[themeIndex].updatedAt = Date()
+                changedThemes = true
+            }
+        }
+
         savePages()
+        if changedThoughts {
+            saveThoughts()
+        }
+        if changedThemes {
+            saveThemes()
+        }
         ThoughtEmbeddingIndex.shared.upsertPage(pages[index])
         reindexThoughts(pages[index].thoughtIDs)
+    }
+
+    func updatePageAliases(_ id: UUID, aliases: [String]) {
+        guard let index = pages.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+
+        pages[index].aliases = normalizedPageAliases(aliases, title: pages[index].title)
+        pages[index].updatedAt = Date()
+        savePages()
+        ThoughtEmbeddingIndex.shared.upsertPage(pages[index])
+    }
+
+    func pageMatchingPrefix(_ prefix: String) -> ThoughtPage? {
+        let key = normalizedPageAliasKey(prefix)
+        guard !key.isEmpty else {
+            return nil
+        }
+
+        return pages.first { page in
+            normalizedPageAliasKey(page.title) == key
+                || page.aliases.contains { normalizedPageAliasKey($0) == key }
+        }
     }
 
     func deletePage(_ id: UUID) {
@@ -326,6 +379,8 @@ final class ThoughtStore: ObservableObject {
             let oldPage = oldPagesByID[resolvedID]
             let parentResolvedID = proposedPage.parentID.flatMap { proposedIDMap[$0] ?? UUID(uuidString: $0) }
             let title = proposedPage.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let aliasCandidates = (oldPage?.aliases ?? [])
+                + [oldPage?.title].compactMap { $0 }
 
             return ThoughtPage(
                 id: resolvedID,
@@ -337,6 +392,7 @@ final class ThoughtStore: ObservableObject {
                 synthesizedAt: oldPage?.synthesizedAt,
                 synthesisSourceHash: oldPage?.synthesisSourceHash,
                 tags: normalizedTags(proposedPage.tags),
+                aliases: normalizedPageAliases(aliasCandidates, title: title),
                 thoughtIDs: validThoughtIDs(proposedPage.thoughtIDs),
                 colorHex: oldPage?.colorHex ?? ThoughtCategoryColor.hex(for: title),
                 createdAt: oldPage?.createdAt ?? now,
@@ -497,6 +553,7 @@ final class ThoughtStore: ObservableObject {
         migrateThemesToPagesIfNeeded()
         backfillThoughtPrefixHintsIfNeeded()
         backfillPageColorsIfNeeded()
+        backfillPageAliasesIfNeeded()
         syncThoughtPageReferences()
         ThoughtEmbeddingIndex.shared.refreshAll(store: self)
     }
@@ -621,6 +678,22 @@ final class ThoughtStore: ObservableObject {
         for index in pages.indices where pages[index].colorHex == nil {
             pages[index].colorHex = ThoughtCategoryColor.hex(for: pages[index].title)
             changed = true
+        }
+
+        if changed {
+            savePages()
+        }
+    }
+
+    private func backfillPageAliasesIfNeeded() {
+        var changed = false
+
+        for index in pages.indices {
+            let normalizedAliases = normalizedPageAliases(pages[index].aliases, title: pages[index].title)
+            if pages[index].aliases != normalizedAliases {
+                pages[index].aliases = normalizedAliases
+                changed = true
+            }
         }
 
         if changed {
@@ -767,6 +840,31 @@ final class ThoughtStore: ObservableObject {
                 .replacingOccurrences(of: " ", with: "-")
         }.filter { !$0.isEmpty }))
         .sorted()
+    }
+
+    private func normalizedPageAliasKey(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+    }
+
+    private func normalizedPageAliases(_ aliases: [String], title: String) -> [String] {
+        let titleKey = normalizedPageAliasKey(title)
+        var seen = Set<String>()
+        var result: [String] = []
+
+        for alias in aliases {
+            let cleanAlias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = normalizedPageAliasKey(cleanAlias)
+            guard !cleanAlias.isEmpty, key != titleKey, !seen.contains(key) else {
+                continue
+            }
+
+            seen.insert(key)
+            result.append(cleanAlias)
+        }
+
+        return result.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     private func pageSort(_ lhs: ThoughtPage, _ rhs: ThoughtPage) -> Bool {

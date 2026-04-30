@@ -49,6 +49,7 @@ struct LibraryWindow: View {
                 || (thought.distilled?.localizedCaseInsensitiveContains(query) ?? false)
                 || thought.tags.contains { $0.localizedCaseInsensitiveContains(query) }
                 || (store.page(with: thought.pageID)?.title.localizedCaseInsensitiveContains(query) ?? false)
+                || (store.page(with: thought.pageID)?.aliases.contains { $0.localizedCaseInsensitiveContains(query) } ?? false)
         }
     }
 
@@ -621,6 +622,7 @@ private struct PageDetailView: View {
     let onSelectPage: (UUID) -> Void
 
     @State private var editedTitle = ""
+    @State private var editedAliases = ""
     @Namespace private var pageGlassNamespace
 
     var body: some View {
@@ -670,6 +672,19 @@ private struct PageDetailView: View {
                         .textSelection(.enabled)
                 }
 
+                HStack(spacing: 8) {
+                    Label("Aliases", systemImage: "tag")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    TextField("Aliases", text: $editedAliases, onCommit: commitAliases)
+                        .font(.callout)
+                        .textFieldStyle(.plain)
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .glassEffect(.regular.tint(LibraryPalette.glassTint), in: .rect(cornerRadius: 8))
+
                 if !childPages.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Subpages")
@@ -716,12 +731,17 @@ private struct PageDetailView: View {
         .background(LibraryPalette.detailBackground)
         .onAppear {
             editedTitle = page.title
+            editedAliases = page.aliases.joined(separator: ", ")
         }
         .onChange(of: page.id) { _, _ in
             editedTitle = page.title
+            editedAliases = page.aliases.joined(separator: ", ")
         }
         .onChange(of: page.title) { _, title in
             editedTitle = title
+        }
+        .onChange(of: page.aliases) { _, aliases in
+            editedAliases = aliases.joined(separator: ", ")
         }
     }
 
@@ -799,7 +819,16 @@ private struct PageDetailView: View {
 
     private func commitTitle() {
         store.renamePage(page.id, title: editedTitle)
+        editedAliases = store.page(with: page.id)?.aliases.joined(separator: ", ") ?? editedAliases
         ThoughtProcessor.shared.synthesizeStalePages()
+    }
+
+    private func commitAliases() {
+        let aliases = editedAliases
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        store.updatePageAliases(page.id, aliases: aliases)
+        editedAliases = store.page(with: page.id)?.aliases.joined(separator: ", ") ?? editedAliases
     }
 }
 

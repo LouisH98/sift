@@ -350,6 +350,7 @@ final class ThoughtEmbeddingIndex: ObservableObject {
     private func searchableText(for page: ThoughtPage) -> String {
         [
             page.title,
+            page.aliases.joined(separator: " "),
             page.tags.joined(separator: " "),
             page.summary,
             page.synthesisMarkdown ?? "",

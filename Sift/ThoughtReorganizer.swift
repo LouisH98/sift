@@ -97,7 +97,7 @@ final class ThoughtReorganizer: ObservableObject {
     ) -> [String] {
         let indent = String(repeating: "  ", count: depth)
         var lines = [
-            "\(indent)- id: \(page.id.uuidString), parentId: \(page.parentID?.uuidString ?? "none"), title: \(page.title), summary: \(page.summary), thoughts: \(page.thoughtIDs.count)"
+            "\(indent)- id: \(page.id.uuidString), parentId: \(page.parentID?.uuidString ?? "none"), title: \(page.title), aliases: \(page.aliases.joined(separator: ", ")), summary: \(page.summary), thoughts: \(page.thoughtIDs.count)"
         ]
 
         let children = (childrenByParentID[page.id] ?? [])
