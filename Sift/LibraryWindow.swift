@@ -357,6 +357,7 @@ struct LibraryWindow: View {
                     selectedPageID = pageID
                 }
             )
+            .id(selectedPage.id)
         } else {
             ContentUnavailableView(
                 store.pages.isEmpty ? "No Pages Yet" : "Select a Page",
@@ -612,6 +613,11 @@ private struct PageSidebar: View {
 }
 
 private struct PageDetailView: View {
+    private enum FocusedField: Hashable {
+        case title
+        case aliases
+    }
+
     let page: ThoughtPage
     let pages: [ThoughtPage]
     let thoughts: [Thought]
@@ -623,6 +629,7 @@ private struct PageDetailView: View {
 
     @State private var editedTitle = ""
     @State private var editedAliases = ""
+    @FocusState private var focusedField: FocusedField?
     @Namespace private var pageGlassNamespace
 
     var body: some View {
@@ -636,6 +643,7 @@ private struct PageDetailView: View {
                     TextField("Page title", text: $editedTitle, onCommit: commitTitle)
                         .font(.system(size: 24, weight: .semibold))
                         .textFieldStyle(.plain)
+                        .focused($focusedField, equals: .title)
 
                     if page.isStale {
                         Label("Stale", systemImage: "arrow.triangle.2.circlepath")
@@ -680,6 +688,7 @@ private struct PageDetailView: View {
                     TextField("Aliases", text: $editedAliases, onCommit: commitAliases)
                         .font(.callout)
                         .textFieldStyle(.plain)
+                        .focused($focusedField, equals: .aliases)
                 }
                 .padding(.horizontal, 12)
                 .frame(height: 32)
@@ -742,6 +751,19 @@ private struct PageDetailView: View {
         }
         .onChange(of: page.aliases) { _, aliases in
             editedAliases = aliases.joined(separator: ", ")
+        }
+        .onChange(of: focusedField) { previousField, _ in
+            switch previousField {
+            case .title:
+                commitTitle()
+            case .aliases:
+                commitAliases()
+            case nil:
+                break
+            }
+        }
+        .onDisappear {
+            commitPendingEdits()
         }
     }
 
@@ -818,17 +840,43 @@ private struct PageDetailView: View {
     }
 
     private func commitTitle() {
-        store.renamePage(page.id, title: editedTitle)
-        editedAliases = store.page(with: page.id)?.aliases.joined(separator: ", ") ?? editedAliases
+        let currentPage = store.page(with: page.id) ?? page
+        let cleanTitle = editedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTitle.isEmpty else {
+            editedTitle = currentPage.title
+            return
+        }
+
+        guard cleanTitle != currentPage.title else {
+            editedTitle = cleanTitle
+            return
+        }
+
+        store.renamePage(page.id, title: cleanTitle)
+        if let updatedPage = store.page(with: page.id) {
+            editedTitle = updatedPage.title
+            editedAliases = updatedPage.aliases.joined(separator: ", ")
+        }
         ThoughtProcessor.shared.synthesizeStalePages()
     }
 
     private func commitAliases() {
+        let currentPage = store.page(with: page.id) ?? page
         let aliases = editedAliases
             .split(separator: ",")
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard aliases != currentPage.aliases else {
+            editedAliases = currentPage.aliases.joined(separator: ", ")
+            return
+        }
+
         store.updatePageAliases(page.id, aliases: aliases)
         editedAliases = store.page(with: page.id)?.aliases.joined(separator: ", ") ?? editedAliases
+    }
+
+    private func commitPendingEdits() {
+        commitTitle()
+        commitAliases()
     }
 }
 

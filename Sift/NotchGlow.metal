@@ -263,7 +263,8 @@ static float4 topEdgeLineGlowSample(
     float3 inputColor,
     float2 notchSize,
     float edrGain,
-    float topOffsetInput
+    float topOffsetInput,
+    float colorMotionInput
 );
 
 static float4 notchGlowSample(
@@ -276,7 +277,8 @@ static float4 notchGlowSample(
     float edrGain,
     float topRadiusInput,
     float bottomRadiusInput,
-    float topOffsetInput
+    float topOffsetInput,
+    float colorMotionInput
 );
 
 static float4 topEdgeProcessingSample(
@@ -316,7 +318,8 @@ static float4 topEdgeLineGlowSample(
     float3 inputColor,
     float2 notchSize,
     float edrGain,
-    float topOffsetInput
+    float topOffsetInput,
+    float colorMotionInput
 ) {
     if (strength <= 0.001 || size.x <= 1.0 || size.y <= 1.0) {
         return float4(0.0);
@@ -353,16 +356,30 @@ static float4 topEdgeLineGlowSample(
     float lipHighlight = exp(-pow(lineDistance / 0.82, 2.0))
         * exp(-pow((position.y - topY) / 2.1, 2.0))
         * 0.82;
-    float energy = (innerFill + rimCore + bloom + halo + wash + lipHighlight) * horizontalTaper * downwardMask * breath;
+    float colorMotion = clamp(colorMotionInput, 0.0, 1.0);
+    float rayDistance = (position.y - topY) / max(tabHeight, 1.0);
+    float primaryRay = pow(clamp(0.5 + (0.5 * sin((normalizedX * 8.8) + (rayDistance * 1.25) - (time * 1.75))), 0.0, 1.0), 2.7);
+    float secondaryRay = pow(clamp(0.5 + (0.5 * sin((normalizedX * 13.5) - (rayDistance * 0.64) + (time * 2.18))), 0.0, 1.0), 3.4);
+    float rayPattern = clamp((primaryRay * 0.72) + (secondaryRay * 0.38), 0.0, 1.0);
+    float rayReach = exp(-max(position.y - topY, 0.0) / 68.0) * smoothstep(topY - 1.0, topY + 18.0, position.y);
+    float shaftModulation = mix(1.0, 0.66 + (rayPattern * rayReach * 0.48), colorMotion);
+    float energy = (innerFill + rimCore + bloom + halo + wash + lipHighlight) * horizontalTaper * downwardMask * breath * shaftModulation;
     float alpha = clamp(energy * strength, 0.0, 0.92);
 
     float3 baseColor = clamp(inputColor, 0.0, 1.0);
     float3 leftBlue = mix(float3(0.16, 0.34, 1.0), baseColor, 0.18);
     float3 centerCyan = mix(float3(0.70, 0.96, 1.0), baseColor, 0.12);
     float3 rightViolet = mix(float3(0.58, 0.26, 1.0), baseColor, 0.12);
-    float3 sideColor = mix(leftBlue, rightViolet, smoothstep(-0.92, 0.92, normalizedX));
-    float3 glowColor = mix(sideColor, centerCyan, clamp(rimCore * 0.54 + innerFill * 0.28 + wash * 0.34, 0.0, 0.88));
-    glowColor = mix(glowColor, float3(1.0), clamp(rimCore * 0.42 + lipHighlight * 0.48, 0.0, 0.72));
+    float colorDrift = colorMotion * ((sin(time * 0.98) * 0.39) + (sin((normalizedX * 3.9) + (time * 1.45)) * 0.21));
+    float spectrumShift = colorMotion * (0.5 + (0.5 * sin((time * 1.12) + (normalizedX * 3.4) + (rayPattern * 1.6))));
+    leftBlue = mix(leftBlue, float3(0.04, 0.76, 1.0), spectrumShift * 0.38);
+    centerCyan = mix(centerCyan, float3(0.64, 1.0, 0.54), spectrumShift * 0.3);
+    rightViolet = mix(rightViolet, float3(1.0, 0.22, 0.92), spectrumShift * 0.34);
+    float3 sideColor = mix(leftBlue, rightViolet, smoothstep(-0.92, 0.92, normalizedX + colorDrift));
+    float centerMix = clamp(rimCore * 0.54 + innerFill * 0.28 + wash * 0.34 + (colorMotion * sin(time * 1.36 + normalizedX + rayPattern) * 0.15), 0.0, 0.88);
+    float3 glowColor = mix(sideColor, centerCyan, centerMix);
+    float whiteHotLimit = mix(0.72, 0.46, colorMotion);
+    glowColor = mix(glowColor, float3(1.0), clamp(rimCore * 0.34 + lipHighlight * 0.38 + (rayPattern * rayReach * colorMotion * 0.16), 0.0, whiteHotLimit));
     glowColor *= alpha * edrGain * 1.16;
 
     return float4(glowColor, alpha);
@@ -378,7 +395,8 @@ static float4 notchGlowSample(
     float edrGain,
     float topRadiusInput,
     float bottomRadiusInput,
-    float topOffsetInput
+    float topOffsetInput,
+    float colorMotionInput
 ) {
     if (strength <= 0.001 || size.x <= 1.0 || size.y <= 1.0) {
         return float4(0.0);
@@ -512,18 +530,31 @@ static float4 notchGlowSample(
         + (sideBloom * mix(1.0, 0.72, openingProgress))
     );
     float topEdgeEnergy = (topEdgeBloom * 0.62) + (topEdgeCore * 1.12);
-    float energy = (lowerLipEnergy + contourEnergy + topEdgeEnergy) * sideFade * breath;
+    float colorMotion = clamp(colorMotionInput, 0.0, 1.0);
+    float rayReach = smoothstep(lipY - 5.0, lipY + 34.0, position.y) * exp(-yBelowLip / mix(108.0, 76.0, openingProgress));
+    float primaryRay = pow(clamp(0.5 + (0.5 * sin((normalizedX * 8.5) + (yBelowLip * 0.034) - (time * 1.7))), 0.0, 1.0), 2.8);
+    float secondaryRay = pow(clamp(0.5 + (0.5 * sin((normalizedX * 13.0) - (yBelowLip * 0.022) + (time * 2.26))), 0.0, 1.0), 3.5);
+    float rayPattern = clamp((primaryRay * 0.72) + (secondaryRay * 0.38), 0.0, 1.0);
+    float shaftModulation = mix(1.0, 0.66 + (rayPattern * rayReach * 0.5), colorMotion);
+    float energy = (lowerLipEnergy + contourEnergy + topEdgeEnergy) * sideFade * breath * shaftModulation;
     float alpha = clamp(energy * strength, 0.0, 0.86);
 
     float3 baseColor = clamp(inputColor, 0.0, 1.0);
     float3 leftBlue = mix(float3(0.16, 0.34, 1.0), baseColor, 0.18);
     float3 centerCyan = mix(float3(0.70, 0.96, 1.0), baseColor, 0.12);
     float3 rightViolet = mix(float3(0.58, 0.26, 1.0), baseColor, 0.12);
-    float horizontalMix = smoothstep(-0.92, 0.92, normalizedX);
+    float colorDrift = colorMotion * ((sin(time * 0.96) * 0.42) + (sin((normalizedX * 3.7) + (time * 1.4)) * 0.22));
+    float spectrumShift = colorMotion * (0.5 + (0.5 * sin((time * 1.08) + (normalizedX * 3.25) + (rayPattern * 1.7))));
+    leftBlue = mix(leftBlue, float3(0.04, 0.76, 1.0), spectrumShift * 0.38);
+    centerCyan = mix(centerCyan, float3(0.64, 1.0, 0.54), spectrumShift * 0.3);
+    rightViolet = mix(rightViolet, float3(1.0, 0.22, 0.92), spectrumShift * 0.34);
+    float horizontalMix = smoothstep(-0.92, 0.92, normalizedX + colorDrift);
     float3 sideColor = mix(leftBlue, rightViolet, horizontalMix);
-    float3 glowColor = mix(sideColor, centerCyan, clamp(hotLip * 0.64 + lipBloom * 0.3 + rimCore * 0.86 + topEdgeCore * 0.28, 0.0, 0.92));
+    float centerMix = clamp(hotLip * 0.64 + lipBloom * 0.3 + rimCore * 0.86 + topEdgeCore * 0.28 + (colorMotion * sin(time * 1.32 + normalizedX + rayPattern) * 0.15), 0.0, 0.92);
+    float3 glowColor = mix(sideColor, centerCyan, centerMix);
 
-    float whiteHot = clamp((rimCore * 0.92) + (topEdgeCore * 0.42) + (hotLip * 0.36), 0.0, 0.82);
+    float whiteHotLimit = mix(0.82, 0.5, colorMotion);
+    float whiteHot = clamp((rimCore * 0.76) + (topEdgeCore * 0.32) + (hotLip * 0.3) + (rayPattern * rayReach * colorMotion * 0.16), 0.0, whiteHotLimit);
     glowColor = mix(glowColor, float3(1.0), whiteHot);
     glowColor *= alpha * edrGain;
 
@@ -546,7 +577,8 @@ fragment half4 notchGlowFragment(
             uniforms.glowColor.rgb,
             uniforms.notchGain.xy,
             uniforms.notchGain.z,
-            uniforms.shape.z
+            uniforms.shape.z,
+            uniforms.notchGain.w
         );
     } else {
         color = notchGlowSample(
@@ -559,7 +591,8 @@ fragment half4 notchGlowFragment(
             uniforms.notchGain.z,
             uniforms.shape.x,
             uniforms.shape.y,
-            uniforms.shape.z
+            uniforms.shape.z,
+            uniforms.notchGain.w
         );
     }
 
@@ -628,6 +661,7 @@ fragment half4 notchProcessingFragment(
         1.0,
         6.0,
         14.0,
+        0.0,
         0.0
     );
 

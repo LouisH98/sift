@@ -12,60 +12,8 @@ struct NotchProcessingEffect: View {
     var motionDurationScale: TimeInterval = 1
     var segmentLengthScale: CGFloat = 1
 
-    private let motionClock = NotchProcessingMotionClock.shared
-
-    @State private var pulseStartedAt: TimeInterval?
-
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 60)) { timeline in
-            GeometryReader { _ in
-                let seconds = timeline.date.timeIntervalSinceReferenceDate
-                let completion = completionProgress(seconds: seconds)
-                let isVisible = state.isDistilling || completion < 1
-                let duration = (state.isDistilling ? 1.95 : 3.0) * motionDurationScale
-                let phase = state.isDistilling ? motionClock.phase(at: seconds, duration: duration) : 0
-                let segmentLength = (state.isDistilling ? 0.17 : 0.1) * segmentLengthScale
-
-                NotchProcessingMetalField(
-                    seconds: seconds,
-                    isDistilling: state.isDistilling,
-                    queuedOpacity: state.isDistilling ? 1 : 0,
-                    completionProgress: completion,
-                    tracerPhase: phase,
-                    topCornerRadius: topCornerRadius,
-                    bottomCornerRadius: bottomCornerRadius,
-                    segmentLength: segmentLength,
-                    renderShape: .notch,
-                    glowColor: metalGlowColor
-                )
-                .opacity(isVisible ? 1 : 0)
-                .animation(.smooth(duration: 0.28), value: state.isDistilling)
-                .animation(.smooth(duration: 0.22), value: state.completionPulse)
-            }
-        }
-        .compositingGroup()
-        .onChange(of: state.completionPulse) { _, newValue in
-            guard newValue > 0 else {
-                pulseStartedAt = nil
-                return
-            }
-
-            pulseStartedAt = Date().timeIntervalSinceReferenceDate
-        }
-    }
-
-    private func completionProgress(seconds: TimeInterval) -> CGFloat {
-        guard let pulseStartedAt else {
-            return 1
-        }
-
-        let duration: TimeInterval = 0.72
-        let elapsed = seconds - pulseStartedAt
-        guard elapsed >= 0, elapsed <= duration else {
-            return 1
-        }
-
-        return CGFloat(elapsed / duration)
+        EmptyView()
     }
 }
 

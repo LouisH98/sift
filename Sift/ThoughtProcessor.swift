@@ -140,12 +140,13 @@ final class ThoughtProcessor: ObservableObject {
 
             queuedThoughtIDs.insert(thought.id)
             let didComplete = await process(thoughtID: thought.id)
-            queuedThoughtIDs.remove(thought.id)
 
             if didComplete {
                 completionPulse += 1
+                queuedThoughtIDs.remove(thought.id)
                 await synthesizeDeferredPagesIfIdle()
             } else {
+                queuedThoughtIDs.remove(thought.id)
                 try? await Task.sleep(nanoseconds: thoughtQueueRetryDelay)
             }
         }

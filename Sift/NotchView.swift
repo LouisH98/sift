@@ -49,6 +49,7 @@ struct NotchView: View {
     @ObservedObject var actionNavigationModel: ActionListNavigationModel
     @ObservedObject var chatModel: ThoughtChatModel
     @ObservedObject private var appearanceSettings = NotchAppearanceSettings.shared
+    @State private var processingFadeStartedAt: TimeInterval?
 
     let onSave: (String) -> Void
     let onCancel: () -> Void
@@ -114,21 +115,51 @@ struct NotchView: View {
         return model.isOpen ? 24 : 14
     }
 
+    private var isDistilling: Bool {
+        processor.notchProcessingState.isDistilling
+    }
+
+    private var isProcessingGlowActive: Bool {
+        isDistilling || processingFadeStartedAt != nil
+    }
+
+    private var processingGlowStrength: CGFloat {
+        guard processor.notchProcessingState.isDistilling else {
+            return 0
+        }
+
+        return NotchProcessingGlowFade.steadyStrength
+    }
+
+    private var primaryGlowStrength: CGFloat {
+        isProcessingGlowActive ? processingGlowStrength : model.transitionGlowStrength
+    }
+
+    private var glowShape: NotchGlowShape {
+        (!model.isOpen && model.hideClosedNotch) ? .topEdgeLine : .notch
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             if appearanceSettings.isGlowEnabled {
-                NotchGlowField(
-                    strength: model.transitionGlowStrength,
-                    notchSize: currentSize,
-                    topCornerRadius: topCornerRadius,
-                    bottomCornerRadius: bottomCornerRadius,
-                    topOffset: topBlurBleed,
-                    shape: (!model.isOpen && model.hideClosedNotch) ? .topEdgeLine : .notch
-                )
-                .opacity(model.transitionGlowStrength > 0.01 ? 1 : 0)
-                .animation(NotchAnimationModel.openAnimation, value: model.isOpen)
-                .animation(NotchAnimationModel.openingGlowAnimation, value: model.transitionGlowStrength)
-                .allowsHitTesting(false)
+                if let processingFadeStartedAt {
+                    TimelineView(.animation(minimumInterval: 1 / 120)) { timeline in
+                        let fadeStrength = NotchProcessingGlowFade.strength(
+                            startedAt: processingFadeStartedAt,
+                            seconds: timeline.date.timeIntervalSinceReferenceDate
+                        )
+
+                        primaryGlowField(
+                            strength: fadeStrength,
+                            colorMotion: NotchProcessingGlowFade.motionStrength(for: fadeStrength)
+                        )
+                    }
+                } else {
+                    primaryGlowField(
+                        strength: primaryGlowStrength,
+                        colorMotion: isDistilling ? 1 : 0
+                    )
+                }
             }
 
             VStack(spacing: 0) {
@@ -174,13 +205,51 @@ struct NotchView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
-            if appearanceSettings.isGlowEnabled {
+            if appearanceSettings.isGlowEnabled && !isProcessingGlowActive {
                 transitionEdgeGlow
             }
         }
         .frame(width: 640, height: visibleStageHeight + topBlurBleed, alignment: .top)
         .compositingGroup()
         .preferredColorScheme(.dark)
+        .onChange(of: isDistilling) { _, isDistilling in
+            updateProcessingFade(isDistilling: isDistilling)
+        }
+    }
+
+    private func primaryGlowField(strength: CGFloat, colorMotion: CGFloat) -> some View {
+        NotchGlowField(
+            strength: strength,
+            notchSize: currentSize,
+            topCornerRadius: topCornerRadius,
+            bottomCornerRadius: bottomCornerRadius,
+            topOffset: topBlurBleed,
+            shape: glowShape,
+            colorMotion: colorMotion
+        )
+        .opacity(strength > 0.01 ? 1 : 0)
+        .animation(NotchAnimationModel.openAnimation, value: model.isOpen)
+        .animation(NotchAnimationModel.openingGlowAnimation, value: model.transitionGlowStrength)
+        .animation(.smooth(duration: isDistilling ? 0.18 : NotchProcessingGlowFade.duration), value: strength)
+        .animation(.smooth(duration: NotchProcessingGlowFade.duration), value: isDistilling)
+        .allowsHitTesting(false)
+    }
+
+    private func updateProcessingFade(isDistilling: Bool) {
+        if isDistilling {
+            processingFadeStartedAt = nil
+            return
+        }
+
+        let startedAt = Date().timeIntervalSinceReferenceDate
+        processingFadeStartedAt = startedAt
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(NotchProcessingGlowFade.duration))
+            if processingFadeStartedAt == startedAt {
+                processingFadeStartedAt = nil
+            }
+        }
     }
 
     private var transitionEdgeGlow: some View {

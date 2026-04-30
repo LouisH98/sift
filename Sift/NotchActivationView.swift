@@ -65,6 +65,7 @@ struct NotchActivationView: View {
     @ObservedObject var model: NotchActivationHoverModel
     @ObservedObject var appearanceSettings: NotchAppearanceSettings
     @ObservedObject var processor: ThoughtProcessor
+    @State private var processingFadeStartedAt: TimeInterval?
 
     let notchSize: CGSize
     let size: CGSize
@@ -78,6 +79,34 @@ struct NotchActivationView: View {
         }
 
         return model.glowStrengthForTransition
+    }
+
+    private var isDistilling: Bool {
+        processor.notchProcessingState.isDistilling
+    }
+
+    private var isProcessingGlowActive: Bool {
+        isDistilling || processingFadeStartedAt != nil
+    }
+
+    private var processingGlowStrength: CGFloat {
+        guard appearanceSettings.isGlowEnabled, isDistilling else {
+            return 0
+        }
+
+        return NotchProcessingGlowFade.steadyStrength
+    }
+
+    private var displayedGlowStrength: CGFloat {
+        isProcessingGlowActive ? processingGlowStrength : glowStrength
+    }
+
+    private var glowColorMotion: CGFloat {
+        isProcessingGlowActive ? 1 : min(1, glowStrength * 0.86)
+    }
+
+    private var shadowGlowStrength: CGFloat {
+        isProcessingGlowActive ? processingGlowStrength * 0.74 : glowStrength
     }
 
     private var surfaceOpacity: CGFloat {
@@ -109,12 +138,21 @@ struct NotchActivationView: View {
     var body: some View {
         ZStack(alignment: .top) {
             if appearanceSettings.isGlowEnabled {
-                NotchGlowField(strength: glowStrength, notchSize: feedbackSize, shape: glowShape)
-                    .opacity(glowStrength > 0.01 ? 1 : 0)
-                    .animation(.smooth(duration: 0.16), value: glowStrength)
-                    .animation(.smooth(duration: 0.14), value: feedbackSize.width)
-                    .animation(.smooth(duration: 0.14), value: feedbackSize.height)
-                    .allowsHitTesting(false)
+                if let processingFadeStartedAt {
+                    TimelineView(.animation(minimumInterval: 1 / 120)) { timeline in
+                        let fadeStrength = NotchProcessingGlowFade.strength(
+                            startedAt: processingFadeStartedAt,
+                            seconds: timeline.date.timeIntervalSinceReferenceDate
+                        )
+
+                        glowField(
+                            strength: fadeStrength,
+                            colorMotion: NotchProcessingGlowFade.motionStrength(for: fadeStrength)
+                        )
+                    }
+                } else {
+                    glowField(strength: displayedGlowStrength, colorMotion: glowColorMotion)
+                }
 
                 notchSurface
                     .padding(.top, usesTopEdgeLine ? 0 : -2)
@@ -123,6 +161,41 @@ struct NotchActivationView: View {
         }
         .frame(width: size.width, height: size.height)
         .preferredColorScheme(.dark)
+        .onChange(of: isDistilling) { _, isDistilling in
+            updateProcessingFade(isDistilling: isDistilling)
+        }
+    }
+
+    private func glowField(strength: CGFloat, colorMotion: CGFloat) -> some View {
+        NotchGlowField(
+            strength: strength,
+            notchSize: feedbackSize,
+            shape: glowShape,
+            colorMotion: colorMotion
+        )
+            .opacity(strength > 0.01 ? 1 : 0)
+            .animation(.smooth(duration: isDistilling ? 0.18 : NotchProcessingGlowFade.duration), value: strength)
+            .animation(.smooth(duration: 0.14), value: feedbackSize.width)
+            .animation(.smooth(duration: 0.14), value: feedbackSize.height)
+            .animation(.smooth(duration: NotchProcessingGlowFade.duration), value: isDistilling)
+            .allowsHitTesting(false)
+    }
+
+    private func updateProcessingFade(isDistilling: Bool) {
+        if isDistilling {
+            processingFadeStartedAt = nil
+            return
+        }
+
+        let startedAt = Date().timeIntervalSinceReferenceDate
+        processingFadeStartedAt = startedAt
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(NotchProcessingGlowFade.duration))
+            if processingFadeStartedAt == startedAt {
+                processingFadeStartedAt = nil
+            }
+        }
     }
 
     @ViewBuilder
@@ -140,7 +213,7 @@ struct NotchActivationView: View {
                 .animation(.smooth(duration: 0.12), value: model.isHovered)
                 .animation(.smooth(duration: 0.08), value: model.isPressed)
                 .animation(.smooth(duration: 0.14), value: model.activationProgress)
-                .animation(.smooth(duration: 0.28), value: processor.notchProcessingState.isDistilling)
+                .animation(.smooth(duration: 1.15), value: processor.notchProcessingState.isDistilling)
         } else {
             NotchShape(topCornerRadius: 6, bottomCornerRadius: 14)
                 .fill(.black.opacity(surfaceOpacity))
@@ -155,8 +228,8 @@ struct NotchActivationView: View {
                     )
                     .frame(width: notchSize.width + 10, height: notchSize.height + 6)
                 }
-                .shadow(color: appearanceSettings.glowColor.opacity(glowStrength * 0.34), radius: 18 + (glowStrength * 18), x: 0, y: 8)
-                .shadow(color: appearanceSettings.glowColor.opacity(glowStrength * 0.22), radius: 34 + (glowStrength * 24), x: 0, y: 18)
+                .shadow(color: appearanceSettings.glowColor.opacity(shadowGlowStrength * 0.34), radius: 18 + (shadowGlowStrength * 18), x: 0, y: 8)
+                .shadow(color: appearanceSettings.glowColor.opacity(shadowGlowStrength * 0.22), radius: 34 + (shadowGlowStrength * 24), x: 0, y: 18)
                 .scaleEffect(
                     x: 1 + (feedbackProgress * 0.05),
                     y: 1 + (feedbackProgress * 0.12),
@@ -165,8 +238,35 @@ struct NotchActivationView: View {
                 .animation(.smooth(duration: 0.12), value: model.isHovered)
                 .animation(.smooth(duration: 0.08), value: model.isPressed)
                 .animation(.smooth(duration: 0.14), value: model.activationProgress)
-                .animation(.smooth(duration: 0.28), value: processor.notchProcessingState.isDistilling)
+                .animation(.smooth(duration: 1.15), value: processor.notchProcessingState.isDistilling)
         }
+    }
+}
+
+enum NotchProcessingGlowFade {
+    static let steadyStrength: CGFloat = 0.3
+    static let duration: TimeInterval = 1.15
+
+    static func strength(startedAt: TimeInterval, seconds: TimeInterval) -> CGFloat {
+        let elapsed = seconds - startedAt
+        guard elapsed >= 0, elapsed <= duration else {
+            return 0
+        }
+
+        let progress = CGFloat(elapsed / duration)
+        let fade = 1 - smootherStep(progress)
+
+        return steadyStrength * fade
+    }
+
+    static func motionStrength(for strength: CGFloat) -> CGFloat {
+        max(0, min(1, strength / max(steadyStrength, 0.001)))
+    }
+
+    private static func smootherStep(_ progress: CGFloat) -> CGFloat {
+        let clamped = max(0, min(1, progress))
+
+        return clamped * clamped * clamped * (clamped * ((clamped * 6) - 15) + 10)
     }
 }
 
@@ -174,82 +274,39 @@ private struct TopEdgeLineProcessingEffect: View {
     let state: NotchProcessingState
     let metalGlowColor: NSColor
 
-    @State private var pulseStartedAt: TimeInterval?
     @State private var queuedFadeStartedAt: TimeInterval?
 
     var body: some View {
         GeometryReader { geometry in
-            TimelineView(.animation(minimumInterval: 1 / 60)) { timeline in
+            TimelineView(.animation(minimumInterval: 1 / 120)) { timeline in
                 let seconds = timeline.date.timeIntervalSinceReferenceDate
-                let completion = completionProgress(seconds: seconds)
                 let queuedFade = queuedFadeProgress(seconds: seconds)
-                let queuedOpacity = state.isQueued ? 1 : max(0, 1 - queuedFade)
-                let isVisible = state.isQueued || queuedOpacity > 0 || completion < 1
-                let phase = state.isDistilling ? CGFloat(seconds.truncatingRemainder(dividingBy: 1.95) / 1.95) : 0
+                let queuedOpacity = state.isSynthesizing ? 1 : max(0, 1 - queuedFade)
+                let processingOpacity = state.isSynthesizing ? queuedOpacity : 0
+                let isVisible = state.isSynthesizing || processingOpacity > 0
+                let phase: CGFloat = 0
 
-                ZStack(alignment: .top) {
-                    NotchProcessingMetalField(
-                        seconds: seconds,
-                        isDistilling: state.isDistilling,
-                        queuedOpacity: queuedOpacity,
-                        completionProgress: 1,
-                        tracerPhase: phase,
-                        topCornerRadius: 0,
-                        bottomCornerRadius: 0,
-                        segmentLength: 0.24,
-                        renderShape: .topEdgeLine,
-                        glowColor: metalGlowColor
-                    )
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-
-                    if completion < 1 {
-                        NotchProcessingMetalField(
-                            seconds: seconds,
-                            isDistilling: false,
-                            queuedOpacity: 0,
-                            completionProgress: completion,
-                            tracerPhase: phase,
-                            topCornerRadius: 0,
-                            bottomCornerRadius: 0,
-                            segmentLength: 0.24,
-                            renderShape: .topEdgeLine,
-                            glowColor: metalGlowColor
-                        )
-                        .frame(width: geometry.size.width, height: geometry.size.height + 28)
-                        .offset(y: -2)
-                    }
-                }
+                NotchProcessingMetalField(
+                    seconds: seconds,
+                    isDistilling: false,
+                    queuedOpacity: processingOpacity,
+                    completionProgress: 1,
+                    tracerPhase: phase,
+                    topCornerRadius: 0,
+                    bottomCornerRadius: 0,
+                    segmentLength: 0.24,
+                    renderShape: .topEdgeLine,
+                    glowColor: metalGlowColor
+                )
+                .frame(width: geometry.size.width, height: geometry.size.height)
                 .opacity(isVisible ? 1 : 0)
                 .animation(.smooth(duration: 0.28), value: state.isDistilling)
-                .animation(.smooth(duration: 0.22), value: state.completionPulse)
             }
         }
         .compositingGroup()
-        .onChange(of: state.completionPulse) { _, newValue in
-            guard newValue > 0 else {
-                pulseStartedAt = nil
-                return
-            }
-
-            pulseStartedAt = Date().timeIntervalSinceReferenceDate
+        .onChange(of: state.isSynthesizing) { _, isSynthesizing in
+            queuedFadeStartedAt = isSynthesizing ? nil : Date().timeIntervalSinceReferenceDate
         }
-        .onChange(of: state.isQueued) { _, isQueued in
-            queuedFadeStartedAt = isQueued ? nil : Date().timeIntervalSinceReferenceDate
-        }
-    }
-
-    private func completionProgress(seconds: TimeInterval) -> CGFloat {
-        guard let pulseStartedAt else {
-            return 1
-        }
-
-        let duration: TimeInterval = 0.72
-        let elapsed = seconds - pulseStartedAt
-        guard elapsed >= 0, elapsed <= duration else {
-            return 1
-        }
-
-        return CGFloat(elapsed / duration)
     }
 
     private func queuedFadeProgress(seconds: TimeInterval) -> CGFloat {
@@ -284,6 +341,7 @@ struct NotchGlowField: View, Animatable {
     var bottomCornerRadius: CGFloat
     let topOffset: CGFloat
     let shape: NotchGlowShape
+    let colorMotion: CGFloat
 
     init(
         strength: CGFloat,
@@ -291,7 +349,8 @@ struct NotchGlowField: View, Animatable {
         topCornerRadius: CGFloat = 6,
         bottomCornerRadius: CGFloat = 14,
         topOffset: CGFloat = 0,
-        shape: NotchGlowShape = .notch
+        shape: NotchGlowShape = .notch,
+        colorMotion: CGFloat = 0
     ) {
         self.strength = strength
         notchWidth = notchSize.width
@@ -300,6 +359,7 @@ struct NotchGlowField: View, Animatable {
         self.bottomCornerRadius = bottomCornerRadius
         self.topOffset = topOffset
         self.shape = shape
+        self.colorMotion = colorMotion
     }
 
     var animatableData: AnimatablePair<CGFloat, AnimatablePair<CGFloat, AnimatablePair<CGFloat, AnimatablePair<CGFloat, CGFloat>>>> {
@@ -324,7 +384,18 @@ struct NotchGlowField: View, Animatable {
         }
     }
 
+    @ViewBuilder
     var body: some View {
+        if colorMotion > 0.001 {
+            TimelineView(.animation(minimumInterval: 1 / 120)) { timeline in
+                metalView(renderTime: timeline.date.timeIntervalSinceReferenceDate)
+            }
+        } else {
+            metalView(renderTime: CACurrentMediaTime())
+        }
+    }
+
+    private func metalView(renderTime: TimeInterval) -> some View {
         NotchGlowMetalView(
             strength: strength,
             notchSize: CGSize(width: notchWidth, height: notchHeight),
@@ -332,7 +403,9 @@ struct NotchGlowField: View, Animatable {
             bottomCornerRadius: bottomCornerRadius,
             topOffset: topOffset,
             shape: shape,
-            glowColor: appearanceSettings.nsGlowColor
+            glowColor: appearanceSettings.nsGlowColor,
+            renderTime: renderTime,
+            colorMotion: colorMotion
         )
     }
 }
@@ -345,6 +418,8 @@ private struct NotchGlowMetalView: NSViewRepresentable {
     let topOffset: CGFloat
     let shape: NotchGlowShape
     let glowColor: NSColor
+    let renderTime: TimeInterval
+    let colorMotion: CGFloat
 
     func makeNSView(context: Context) -> NotchGlowRenderView {
         NotchGlowRenderView()
@@ -358,7 +433,9 @@ private struct NotchGlowMetalView: NSViewRepresentable {
             bottomCornerRadius: bottomCornerRadius,
             topOffset: topOffset,
             shape: shape,
-            glowColor: glowColor
+            glowColor: glowColor,
+            renderTime: renderTime,
+            colorMotion: colorMotion
         )
     }
 }
@@ -383,6 +460,8 @@ final class NotchGlowRenderView: NSView {
     private var topOffset: CGFloat = 0
     private var shape: NotchGlowShape = .notch
     private var glowColor: NSColor = .systemCyan
+    private var renderTime: TimeInterval = 0
+    private var colorMotion: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         let device = MTLCreateSystemDefaultDevice()
@@ -463,7 +542,9 @@ final class NotchGlowRenderView: NSView {
         bottomCornerRadius: CGFloat,
         topOffset: CGFloat,
         shape: NotchGlowShape,
-        glowColor: NSColor
+        glowColor: NSColor,
+        renderTime: TimeInterval,
+        colorMotion: CGFloat
     ) {
         self.strength = strength
         self.notchSize = notchSize
@@ -472,6 +553,8 @@ final class NotchGlowRenderView: NSView {
         self.topOffset = topOffset
         self.shape = shape
         self.glowColor = glowColor.usingColorSpace(.deviceRGB) ?? glowColor
+        self.renderTime = renderTime
+        self.colorMotion = colorMotion
         render()
     }
 
@@ -504,13 +587,13 @@ final class NotchGlowRenderView: NSView {
                 Float(bounds.width) * scale,
                 Float(bounds.height) * scale,
                 Float(strength),
-                Float(CACurrentMediaTime().truncatingRemainder(dividingBy: 120))
+                Float(renderTime.truncatingRemainder(dividingBy: 120))
             ),
             notchGain: SIMD4(
                 Float(notchSize.width) * scale,
                 Float(notchSize.height) * scale,
                 1.85,
-                0
+                Float(max(0, min(1, colorMotion)))
             ),
             glowColor: SIMD4(
                 Float(glowColor.redComponent),
