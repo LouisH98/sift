@@ -978,7 +978,7 @@ final class ActionReminderScheduler {
     }
 
     func cancel(actionItemIDs: [UUID]) {
-        let identifiers = actionItemIDs.map { notificationIdentifier(for: $0) }
+        let identifiers = actionItemIDs.flatMap { notificationIdentifiers(for: $0) }
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
     }
 
@@ -1011,27 +1011,55 @@ final class ActionReminderScheduler {
         }
 
         let center = UNUserNotificationCenter.current()
-        let identifier = notificationIdentifier(for: actionItem.id)
+        let leadIdentifier = notificationIdentifier(for: actionItem.id, kind: .lead)
+        let dueIdentifier = notificationIdentifier(for: actionItem.id, kind: .due)
         let reminderAt = exactDueDate.addingTimeInterval(-TimeInterval(leadTimeMinutes * 60))
         let now = Date()
-        let content = notificationContent(for: actionItem, exactDueDate: exactDueDate)
+        let leadContent = notificationContent(for: actionItem, exactDueDate: exactDueDate, kind: .lead)
+        let dueContent = notificationContent(for: actionItem, exactDueDate: exactDueDate, kind: .due)
 
-        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        center.removePendingNotificationRequests(withIdentifiers: notificationIdentifiers(for: actionItem.id))
 
-        guard reminderAt > now else {
-            await deliverImmediateReminderIfNeeded(
-                identifier: identifier,
-                content: content,
-                exactDueDate: exactDueDate,
-                now: now,
-                leadTimeMinutes: leadTimeMinutes
-            )
+        if leadTimeMinutes > 0 {
+            if reminderAt > now {
+                await scheduleNotification(
+                    identifier: leadIdentifier,
+                    content: leadContent,
+                    date: reminderAt,
+                    center: center
+                )
+            } else {
+                await deliverImmediateReminderIfNeeded(
+                    identifier: leadIdentifier,
+                    content: leadContent,
+                    exactDueDate: exactDueDate,
+                    now: now,
+                    leadTimeMinutes: leadTimeMinutes
+                )
+            }
+        }
+
+        guard exactDueDate > now else {
             return
         }
 
+        await scheduleNotification(
+            identifier: dueIdentifier,
+            content: dueContent,
+            date: exactDueDate,
+            center: center
+        )
+    }
+
+    private func scheduleNotification(
+        identifier: String,
+        content: UNNotificationContent,
+        date: Date,
+        center: UNUserNotificationCenter
+    ) async {
         let dateComponents = Calendar.current.dateComponents(
             [.year, .month, .day, .hour, .minute],
-            from: reminderAt
+            from: date
         )
         let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: false)
         let request = UNNotificationRequest(
@@ -1065,17 +1093,46 @@ final class ActionReminderScheduler {
         try? await center.add(request)
     }
 
-    private func notificationContent(for actionItem: ActionItem, exactDueDate: Date) -> UNMutableNotificationContent {
+    private func notificationContent(
+        for actionItem: ActionItem,
+        exactDueDate: Date,
+        kind: NotificationKind
+    ) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = actionItem.title
-        content.body = "TODO due \(DateFormatter.actionReminderDueDate.string(from: exactDueDate))"
+        content.body = switch kind {
+        case .lead:
+            "TODO due \(DateFormatter.actionReminderDueDate.string(from: exactDueDate))"
+        case .due:
+            "TODO is due now"
+        }
         content.sound = .default
-        content.userInfo = ["actionItemID": actionItem.id.uuidString]
+        content.userInfo = [
+            "actionItemID": actionItem.id.uuidString,
+            "notificationKind": kind.rawValue
+        ]
         return content
     }
 
-    private func notificationIdentifier(for actionItemID: UUID) -> String {
+    private func notificationIdentifier(for actionItemID: UUID, kind: NotificationKind) -> String {
+        "\(notificationPrefix)\(kind.rawValue)-\(actionItemID.uuidString)"
+    }
+
+    private func notificationIdentifiers(for actionItemID: UUID) -> [String] {
+        [
+            legacyNotificationIdentifier(for: actionItemID),
+            notificationIdentifier(for: actionItemID, kind: .lead),
+            notificationIdentifier(for: actionItemID, kind: .due)
+        ]
+    }
+
+    private func legacyNotificationIdentifier(for actionItemID: UUID) -> String {
         "\(notificationPrefix)\(actionItemID.uuidString)"
+    }
+
+    private enum NotificationKind: String {
+        case lead
+        case due
     }
 }
 
