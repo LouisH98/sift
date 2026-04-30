@@ -21,7 +21,7 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
       DERIVED_DATA_PATH: build/DerivedData
       APP_PATH: build/DerivedData/Build/Products/Debug/Sift.app
-      ZIP_PATH: build/Sift-Debug.zip
+      ZIP_PATH: build/Sift.zip
 
     steps:
       - name: Check out repository
@@ -54,6 +54,6 @@ jobs:
       - name: Upload app artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Sift-Debug
+          name: Sift
           path: ${{ env.ZIP_PATH }}
           if-no-files-found: error
