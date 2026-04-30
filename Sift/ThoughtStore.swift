@@ -19,6 +19,7 @@ final class ThoughtStore: ObservableObject {
     private let actionItemsURL: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let dataRecoveryService: DataRecoveryService
 
     private init() {
         let directoryURL = AppIdentity.applicationSupportDirectory()
@@ -34,6 +35,7 @@ final class ThoughtStore: ObservableObject {
 
         decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        dataRecoveryService = DataRecoveryService(applicationSupportDirectory: directoryURL)
 
         load()
     }
@@ -570,7 +572,19 @@ final class ThoughtStore: ObservableObject {
             }
 
             let data = try Data(contentsOf: url)
-            return try decoder.decode([T].self, from: data)
+            do {
+                return try decoder.decode([T].self, from: data)
+            } catch {
+                do {
+                    if let quarantineURL = try dataRecoveryService.quarantineCorruptFile(at: url, error: error) {
+                        NSLog("Sift quarantined corrupt \(url.lastPathComponent) at \(quarantineURL.path)")
+                    }
+                } catch {
+                    NSLog("Sift failed to quarantine corrupt \(url.lastPathComponent): \(error.localizedDescription)")
+                }
+
+                throw error
+            }
         } catch {
             NSLog("Sift failed to load \(url.lastPathComponent): \(error.localizedDescription)")
             return fallback
@@ -605,6 +619,7 @@ final class ThoughtStore: ObservableObject {
             )
 
             let data = try encoder.encode(value)
+            try dataRecoveryService.backupExistingFile(at: url, reason: .save)
             try data.write(to: url, options: [.atomic])
         } catch {
             NSLog("Sift failed to save \(url.lastPathComponent): \(error.localizedDescription)")

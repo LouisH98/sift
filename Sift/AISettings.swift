@@ -30,6 +30,7 @@ final class AISettings: ObservableObject {
         static let apiEndpoint = "ai.apiEndpoint"
         static let modelID = "ai.modelID"
         static let apiKey = "openai.apiKey"
+        static let isChatWebSearchEnabled = "ai.chatWebSearchEnabled"
     }
 
     static let defaultAPIBaseURL = "https://api.openai.com/v1"
@@ -64,6 +65,12 @@ final class AISettings: ObservableObject {
     @Published var modelID: String {
         didSet {
             UserDefaults.standard.set(modelID, forKey: Keys.modelID)
+        }
+    }
+
+    @Published var isChatWebSearchEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isChatWebSearchEnabled, forKey: Keys.isChatWebSearchEnabled)
         }
     }
 
@@ -121,6 +128,7 @@ final class AISettings: ObservableObject {
         apiEndpoint = UserDefaults.standard.string(forKey: Keys.apiEndpoint)
             .flatMap(APIEndpoint.init(rawValue:)) ?? Self.defaultAPIEndpoint
         modelID = UserDefaults.standard.string(forKey: Keys.modelID) ?? Self.defaultModelID
+        isChatWebSearchEnabled = UserDefaults.standard.bool(forKey: Keys.isChatWebSearchEnabled)
         apiKey = ""
     }
 }

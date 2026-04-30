@@ -12,12 +12,20 @@ final class ThoughtEmbeddingIndex: ObservableObject {
         let id: UUID
     }
 
-    private struct Record: Codable {
+    private struct Record: Codable, Sendable {
         let kind: String
         let id: UUID
         let contentHash: String
         let vector: [Double]
         let updatedAt: Date
+    }
+
+    private struct IndexWorkItem: Sendable {
+        let kind: String
+        let id: UUID
+        let text: String
+        let contentHash: String
+        let previousContentHash: String?
     }
 
     struct Status {
@@ -40,9 +48,9 @@ final class ThoughtEmbeddingIndex: ObservableObject {
     @Published private(set) var lastError: String?
 
     private let indexURL: URL
-    private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private var records: [Key: Record] = [:]
+    private var pendingSaveTask: Task<Void, Never>?
 
     func status(store: ThoughtStore) -> Status {
         let expectedKeys = liveKeys(store: store)
@@ -64,10 +72,6 @@ final class ThoughtEmbeddingIndex: ObservableObject {
     private init() {
         indexURL = AppIdentity.applicationSupportDirectory().appendingPathComponent("semantic-index.json")
 
-        encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-
         decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
@@ -87,28 +91,20 @@ final class ThoughtEmbeddingIndex: ObservableObject {
 
         isRebuilding = true
         rebuiltCount = 0
-        rebuildTotal = store.thoughts.count + store.pages.count + store.actionItems.count
+        let workItems = rebuildWorkItems(store: store)
+        rebuildTotal = workItems.count
         lastError = nil
         revision += 1
 
         records.removeAll()
 
-        for thought in store.thoughts {
-            _ = upsertThought(thought, store: store, shouldSave: false)
-            await advanceRebuildProgress()
+        for chunk in workItems.chunked(into: 24) {
+            let embeddedRecords = await Self.embeddedRecords(for: chunk)
+            apply(embeddedRecords)
+            await advanceRebuildProgress(by: chunk.count)
         }
 
-        for page in store.pages {
-            _ = upsertPage(page, shouldSave: false)
-            await advanceRebuildProgress()
-        }
-
-        for item in store.actionItems {
-            _ = upsertActionItem(item, store: store, shouldSave: false)
-            await advanceRebuildProgress()
-        }
-
-        save()
+        save(debounce: 0)
         lastRebuiltAt = Date()
         isRebuilding = false
         revision += 1
@@ -120,24 +116,37 @@ final class ThoughtEmbeddingIndex: ObservableObject {
         }
 
         var validKeys = Set<Key>()
+        var workItems: [IndexWorkItem] = []
         var didChange = false
 
         for thought in store.thoughts {
             let key = Key(kind: .thought, id: thought.id)
             validKeys.insert(key)
-            didChange = upsertThought(thought, store: store, shouldSave: false) || didChange
+            let result = changedWorkItem(kind: .thought, id: thought.id, text: searchableText(for: thought, store: store))
+            didChange = result.didChange || didChange
+            if let workItem = result.workItem {
+                workItems.append(workItem)
+            }
         }
 
         for page in store.pages {
             let key = Key(kind: .page, id: page.id)
             validKeys.insert(key)
-            didChange = upsertPage(page, shouldSave: false) || didChange
+            let result = changedWorkItem(kind: .page, id: page.id, text: searchableText(for: page))
+            didChange = result.didChange || didChange
+            if let workItem = result.workItem {
+                workItems.append(workItem)
+            }
         }
 
         for item in store.actionItems {
             let key = Key(kind: .actionItem, id: item.id)
             validKeys.insert(key)
-            didChange = upsertActionItem(item, store: store, shouldSave: false) || didChange
+            let result = changedWorkItem(kind: .actionItem, id: item.id, text: searchableText(for: item, store: store))
+            didChange = result.didChange || didChange
+            if let workItem = result.workItem {
+                workItems.append(workItem)
+            }
         }
 
         let staleKeys = records.keys.filter { !validKeys.contains($0) }
@@ -147,7 +156,11 @@ final class ThoughtEmbeddingIndex: ObservableObject {
         }
 
         if didChange {
-            save()
+            if workItems.isEmpty {
+                save()
+            } else {
+                refresh(workItems: workItems)
+            }
         } else {
             revision += 1
         }
@@ -191,25 +204,34 @@ final class ThoughtEmbeddingIndex: ObservableObject {
 
     func search(query: String, store: ThoughtStore, limit: Int) -> [ThoughtChatSource]? {
         let cleanQuery = cleanWhitespace(query)
-        guard !cleanQuery.isEmpty,
+        guard limit > 0,
+              !cleanQuery.isEmpty,
               let embedding = Self.embedding,
               let queryVector = embedding.vector(for: cleanQuery) else {
             return nil
         }
 
-        let matches = records.values
-            .compactMap { record -> ThoughtChatSource? in
-                let score = cosineSimilarity(queryVector, record.vector)
-                guard score > 0 else {
-                    return nil
-                }
+        var sources: [ThoughtChatSource] = []
+        sources.reserveCapacity(limit)
 
-                return source(for: record, score: score, store: store)
+        for record in records.values {
+            let score = cosineSimilarity(queryVector, record.vector)
+            guard score > 0,
+                  let source = source(for: record, score: score, store: store) else {
+                continue
             }
-            .sorted(by: rankedBefore)
-            .prefix(limit)
 
-        let sources = Array(matches)
+            if let insertIndex = sources.firstIndex(where: { rankedBefore(source, $0) }) {
+                sources.insert(source, at: insertIndex)
+            } else if sources.count < limit {
+                sources.append(source)
+            }
+
+            if sources.count > limit {
+                sources.removeLast()
+            }
+        }
+
         guard sources.contains(where: { $0.score >= 0.28 }) else {
             return nil
         }
@@ -267,8 +289,102 @@ final class ThoughtEmbeddingIndex: ObservableObject {
         return true
     }
 
-    private func advanceRebuildProgress() async {
-        rebuiltCount += 1
+    private func rebuildWorkItems(store: ThoughtStore) -> [IndexWorkItem] {
+        store.thoughts.compactMap { thought in
+            freshWorkItem(kind: .thought, id: thought.id, text: searchableText(for: thought, store: store))
+        } + store.pages.compactMap { page in
+            freshWorkItem(kind: .page, id: page.id, text: searchableText(for: page))
+        } + store.actionItems.compactMap { item in
+            freshWorkItem(kind: .actionItem, id: item.id, text: searchableText(for: item, store: store))
+        }
+    }
+
+    private func changedWorkItem(
+        kind: ThoughtChatSource.Kind,
+        id: UUID,
+        text: String
+    ) -> (workItem: IndexWorkItem?, didChange: Bool) {
+        let cleanText = cleanWhitespace(text)
+        let key = Key(kind: kind, id: id)
+        guard !cleanText.isEmpty else {
+            return (nil, records.removeValue(forKey: key) != nil)
+        }
+
+        let hash = stableHash(cleanText)
+        let previousHash = records[key]?.contentHash
+        guard previousHash != hash else {
+            return (nil, false)
+        }
+
+        return (
+            IndexWorkItem(
+                kind: kind.rawValue,
+                id: id,
+                text: String(cleanText.prefix(4_000)),
+                contentHash: hash,
+                previousContentHash: previousHash
+            ),
+            true
+        )
+    }
+
+    private func freshWorkItem(kind: ThoughtChatSource.Kind, id: UUID, text: String) -> IndexWorkItem? {
+        let cleanText = cleanWhitespace(text)
+        guard !cleanText.isEmpty else {
+            return nil
+        }
+
+        return IndexWorkItem(
+            kind: kind.rawValue,
+            id: id,
+            text: String(cleanText.prefix(4_000)),
+            contentHash: stableHash(cleanText),
+            previousContentHash: nil
+        )
+    }
+
+    private func refresh(workItems: [IndexWorkItem]) {
+        Task {
+            let embeddedRecords = await Self.embeddedRecords(for: workItems)
+            apply(embeddedRecords, guardingWith: workItems)
+            save()
+        }
+    }
+
+    private func apply(_ embeddedRecords: [Record], guardingWith workItems: [IndexWorkItem]? = nil) {
+        var workItemsByKey: [Key: IndexWorkItem]?
+        if let workItems {
+            var keyedItems: [Key: IndexWorkItem] = [:]
+            for workItem in workItems {
+                guard let kind = ThoughtChatSource.Kind(rawValue: workItem.kind), kind != .web else {
+                    continue
+                }
+
+                keyedItems[Key(kind: kind, id: workItem.id)] = workItem
+            }
+
+            workItemsByKey = keyedItems
+        }
+
+        for record in embeddedRecords {
+            guard let kind = ThoughtChatSource.Kind(rawValue: record.kind), kind != .web else {
+                continue
+            }
+
+            let key = Key(kind: kind, id: record.id)
+            if let workItem = workItemsByKey?[key],
+               records[key]?.contentHash != workItem.previousContentHash {
+                continue
+            }
+
+            records[key] = record
+        }
+
+        revision += 1
+    }
+
+    private func advanceRebuildProgress(by count: Int) async {
+        rebuiltCount += count
         revision += 1
         await Task.yield()
     }
@@ -504,27 +620,79 @@ final class ThoughtEmbeddingIndex: ObservableObject {
         }
     }
 
-    private func save() {
-        do {
-            try FileManager.default.createDirectory(
-                at: indexURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
+    private func save(debounce: TimeInterval = 0.75) {
+        pendingSaveTask?.cancel()
 
-            let data = try encoder.encode(records.values.sorted { lhs, rhs in
-                if lhs.kind != rhs.kind {
-                    return lhs.kind < rhs.kind
+        let snapshot = records.values.sorted { lhs, rhs in
+            if lhs.kind != rhs.kind {
+                return lhs.kind < rhs.kind
+            }
+
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+
+        pendingSaveTask = Task {
+            if debounce > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(debounce * 1_000_000_000))
+                } catch {
+                    return
+                }
+            }
+
+            let result = await Self.write(records: snapshot, to: indexURL)
+            switch result {
+            case .success:
+                revision += 1
+            case .failure(let error):
+                NSLog("Sift failed to save semantic index: \(error.localizedDescription)")
+                lastError = error.localizedDescription
+                revision += 1
+            }
+        }
+    }
+
+    private static func embeddedRecords(for workItems: [IndexWorkItem]) async -> [Record] {
+        await Task.detached(priority: .utility) {
+            guard let embedding = NLEmbedding.sentenceEmbedding(for: .english) else {
+                return []
+            }
+
+            return workItems.compactMap { workItem in
+                guard let vector = embedding.vector(for: workItem.text) else {
+                    return nil
                 }
 
-                return lhs.id.uuidString < rhs.id.uuidString
-            })
-            try data.write(to: indexURL, options: [.atomic])
-            revision += 1
-        } catch {
-            NSLog("Sift failed to save semantic index: \(error.localizedDescription)")
-            lastError = error.localizedDescription
-            revision += 1
-        }
+                return Record(
+                    kind: workItem.kind,
+                    id: workItem.id,
+                    contentHash: workItem.contentHash,
+                    vector: vector,
+                    updatedAt: Date()
+                )
+            }
+        }.value
+    }
+
+    private static func write(records: [Record], to url: URL) async -> Result<Void, Error> {
+        await Task.detached(priority: .utility) {
+            do {
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                encoder.dateEncodingStrategy = .iso8601
+
+                let data = try encoder.encode(records)
+                try data.write(to: url, options: [.atomic])
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }.value
     }
 
     private static var embedding: NLEmbedding? {
@@ -539,4 +707,16 @@ private extension DateFormatter {
         formatter.timeStyle = .none
         return formatter
     }()
+}
+
+private extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        guard size > 0, !isEmpty else {
+            return []
+        }
+
+        return stride(from: 0, to: count, by: size).map { start in
+            Array(self[start..<Swift.min(start + size, count)])
+        }
+    }
 }

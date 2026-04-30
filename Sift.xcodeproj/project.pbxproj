@@ -9,16 +9,34 @@
 /* Begin PBXBuildFile section */
 		B1DE41472F9F6AA0007A9FC8 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = B1DE41462F9F6AA0007A9FC8 /* KeyboardShortcuts */; };
 		B1DE414A2F9F7B24007A9FC8 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B1DE41492F9F7B24007A9FC8 /* Markdown */; };
+		7156D9C5A6F44B6DA6DD6463 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = B1DE41462F9F6AA0007A9FC8 /* KeyboardShortcuts */; };
+		DFD3A21D4D9543C099D8F1BC /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B1DE41492F9F7B24007A9FC8 /* Markdown */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		6E27E1EB8F394982B8E5C1A9 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B1DE412E2F9F61AC007A9FC8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B1DE41352F9F61AC007A9FC8;
+			remoteInfo = Sift;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		B1DE41362F9F61AC007A9FC8 /* Sift.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Sift.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		91DE9C82F78540A79B9005D5 /* SiftTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SiftTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		B1DE41382F9F61AC007A9FC8 /* Sift */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Sift;
+			sourceTree = "<group>";
+		};
+		DED802D3A6264F33B3AB30D5 /* SiftTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SiftTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -33,6 +51,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BB0D70F4B31847F2AB125E40 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7156D9C5A6F44B6DA6DD6463 /* KeyboardShortcuts in Frameworks */,
+				DFD3A21D4D9543C099D8F1BC /* Markdown in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -40,6 +67,7 @@
 			isa = PBXGroup;
 			children = (
 				B1DE41382F9F61AC007A9FC8 /* Sift */,
+				DED802D3A6264F33B3AB30D5 /* SiftTests */,
 				B1DE41372F9F61AC007A9FC8 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -48,6 +76,7 @@
 			isa = PBXGroup;
 			children = (
 				B1DE41362F9F61AC007A9FC8 /* Sift.app */,
+				91DE9C82F78540A79B9005D5 /* SiftTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -79,6 +108,31 @@
 			productReference = B1DE41362F9F61AC007A9FC8 /* Sift.app */;
 			productType = "com.apple.product-type.application";
 		};
+		8990CCE93BCA4818A357A59F /* SiftTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2A25CA5E89D34B42A5A89D76 /* Build configuration list for PBXNativeTarget "SiftTests" */;
+			buildPhases = (
+				81565B8A0C444C10AD23B5DE /* Sources */,
+				BB0D70F4B31847F2AB125E40 /* Frameworks */,
+				01C45D947FB84DC69D48823F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				51AE559AE12D4E95AB3EFA8F /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				DED802D3A6264F33B3AB30D5 /* SiftTests */,
+			);
+			name = SiftTests;
+			packageProductDependencies = (
+				B1DE41462F9F6AA0007A9FC8 /* KeyboardShortcuts */,
+				B1DE41492F9F7B24007A9FC8 /* Markdown */,
+			);
+			productName = SiftTests;
+			productReference = 91DE9C82F78540A79B9005D5 /* SiftTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -91,6 +145,10 @@
 				TargetAttributes = {
 					B1DE41352F9F61AC007A9FC8 = {
 						CreatedOnToolsVersion = 26.4.1;
+					};
+					8990CCE93BCA4818A357A59F = {
+						CreatedOnToolsVersion = 26.4.1;
+						TestTargetID = B1DE41352F9F61AC007A9FC8;
 					};
 				};
 			};
@@ -113,12 +171,20 @@
 			projectRoot = "";
 			targets = (
 				B1DE41352F9F61AC007A9FC8 /* Sift */,
+				8990CCE93BCA4818A357A59F /* SiftTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		B1DE41342F9F61AC007A9FC8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		01C45D947FB84DC69D48823F /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -135,7 +201,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		81565B8A0C444C10AD23B5DE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		51AE559AE12D4E95AB3EFA8F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B1DE41352F9F61AC007A9FC8 /* Sift */;
+			targetProxy = 6E27E1EB8F394982B8E5C1A9 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		B1DE413F2F9F61AD007A9FC8 /* Debug */ = {
@@ -262,7 +343,7 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
+				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
@@ -294,7 +375,7 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
+				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
@@ -316,6 +397,60 @@
 			};
 			name = Release;
 		};
+		7730C0BAAE5A4643A0137577 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.louis.SiftTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Sift.app/Contents/MacOS/Sift";
+			};
+			name = Debug;
+		};
+		7B4E71E871384FFFBD4B0B1B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.louis.SiftTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Sift.app/Contents/MacOS/Sift";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -333,6 +468,15 @@
 			buildConfigurations = (
 				B1DE41422F9F61AD007A9FC8 /* Debug */,
 				B1DE41432F9F61AD007A9FC8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		2A25CA5E89D34B42A5A89D76 /* Build configuration list for PBXNativeTarget "SiftTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7730C0BAAE5A4643A0137577 /* Debug */,
+				7B4E71E871384FFFBD4B0B1B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

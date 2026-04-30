@@ -54,6 +54,12 @@ To rebuild and relaunch once without watching for changes:
 
 The install scripts place the app at `~/Applications/Sift.app` by default and replace that app if it already exists.
 
+Run the test suite from the repo root:
+
+```sh
+./scripts/test.sh
+```
+
 ## AI Configuration
 
 Open Sift from the menu bar, go to Settings, and enable AI processing.

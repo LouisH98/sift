@@ -1260,10 +1260,10 @@ private struct OpenAIResponsesAgentClient {
         """
         You are Sift's agentic chat assistant for a private thought notebook.
         Default assumption: the user is asking about their saved Sift thoughts, pages, and todos.
+        \(ThoughtChatAgentConfiguration.webSearchInstruction(isWebSearchEnabled: settings.isChatWebSearchEnabled))
         Before answering any question about people, pets, dates, obligations, plans, preferences, memories, notes, or todos, call the most relevant local tool and use those results.
         Use search_notes for general notebook questions, search_actions for todos, get_page_tree for notebook structure, and get_recent_activity for recent work.
         Do not give generic advice when local Sift results answer the question.
-        Use web search only when the user explicitly asks for current, external, or public information; do not use web search for private names, pets, todos, or notebook questions.
         Never claim a new thought has been saved unless the tool result says it is pending user confirmation or the user has confirmed it.
         If the user wants to capture a new thought, call propose_add_thought with the exact thought text and a short reason.
         If the user wants to complete a todo, call propose_complete_action. Do not mark todos complete without user confirmation.
@@ -1272,10 +1272,86 @@ private struct OpenAIResponsesAgentClient {
     }
 
     private var tools: [[String: Any]] {
+        ThoughtChatAgentConfiguration.tools(isWebSearchEnabled: settings.isChatWebSearchEnabled)
+    }
+
+    private func authenticatedRequest(url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        let apiKey = settings.loadAPIKeyIfNeeded().trimmingCharacters(in: .whitespacesAndNewlines)
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        return request
+    }
+
+    private func endpointURL(path endpointPath: String) throws -> URL {
+        let rawBaseURL = settings.apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var components = URLComponents(string: rawBaseURL), components.scheme != nil, components.host != nil else {
+            throw OpenAIClientError.invalidBaseURL
+        }
+
+        let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        components.path = path.isEmpty ? "/\(endpointPath)" : "/\(path)/\(endpointPath)"
+        guard let url = components.url else {
+            throw OpenAIClientError.invalidBaseURL
+        }
+
+        return url
+    }
+
+    private var statelessProviderKey: String {
         [
-            [
-                "type": "web_search"
-            ],
+            settings.apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            settings.modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        ].joined(separator: "|")
+    }
+
+    private func isZeroDataRetentionPreviousResponseError(_ error: Error) -> Bool {
+        guard case let OpenAIClientError.apiError(message) = error else {
+            return false
+        }
+
+        let lowercased = message.lowercased()
+        return lowercased.contains("previous_response_id")
+            && (lowercased.contains("store")
+                || lowercased.contains("zero data retention")
+                || lowercased.contains("unsupported"))
+    }
+
+    private func apiErrorMessage(from data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return String(data: data, encoding: .utf8)
+        }
+
+        if let error = object["error"] as? [String: Any] {
+            return error["message"] as? String
+        }
+
+        return object["message"] as? String
+    }
+
+    private func appendUnique(_ newSources: [ThoughtChatSource], to sources: inout [ThoughtChatSource]) {
+        for source in newSources {
+            guard !sources.contains(where: { $0.url == source.url && $0.displayTitle == source.displayTitle }) else {
+                continue
+            }
+            sources.append(source)
+        }
+    }
+}
+
+enum ThoughtChatAgentConfiguration {
+    static func webSearchInstruction(isWebSearchEnabled: Bool) -> String {
+        if isWebSearchEnabled {
+            return "Web search is available. Use it only when the user explicitly asks for current, external, or public information; do not use web search for private names, pets, todos, or notebook questions."
+        }
+
+        return "Web search is not available in this chat. Do not claim to browse the web; answer from local Sift tools or say when local context is insufficient."
+    }
+
+    static func tools(isWebSearchEnabled: Bool) -> [[String: Any]] {
+        var tools: [[String: Any]] = [
             [
                 "type": "function",
                 "name": "search_notes",
@@ -1427,65 +1503,12 @@ private struct OpenAIResponsesAgentClient {
                 ]
             ]
         ]
-    }
 
-    private func authenticatedRequest(url: URL) -> URLRequest {
-        var request = URLRequest(url: url)
-        let apiKey = settings.loadAPIKeyIfNeeded().trimmingCharacters(in: .whitespacesAndNewlines)
-        if !apiKey.isEmpty {
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if isWebSearchEnabled {
+            tools.insert(["type": "web_search"], at: 0)
         }
 
-        return request
-    }
-
-    private func endpointURL(path endpointPath: String) throws -> URL {
-        let rawBaseURL = settings.apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard var components = URLComponents(string: rawBaseURL), components.scheme != nil, components.host != nil else {
-            throw OpenAIClientError.invalidBaseURL
-        }
-
-        let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        components.path = path.isEmpty ? "/\(endpointPath)" : "/\(path)/\(endpointPath)"
-
-        guard let url = components.url else {
-            throw OpenAIClientError.invalidBaseURL
-        }
-
-        return url
-    }
-
-    private func apiErrorMessage(from data: Data) -> String? {
-        try? JSONDecoder().decode(OpenAIAgentErrorEnvelope.self, from: data).error.message
-    }
-
-    private var statelessProviderKey: String {
-        [
-            settings.apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-            settings.modelID.trimmingCharacters(in: .whitespacesAndNewlines)
-        ].joined(separator: "|")
-    }
-
-    private func isZeroDataRetentionPreviousResponseError(_ error: Error) -> Bool {
-        let message: String
-        if case OpenAIClientError.apiError(let apiMessage) = error {
-            message = apiMessage
-        } else {
-            message = error.localizedDescription
-        }
-
-        let normalized = message.lowercased()
-        return normalized.contains("zero data retention")
-            && normalized.contains("previous response")
-    }
-
-    private func appendUnique(_ newSources: [ThoughtChatSource], to sources: inout [ThoughtChatSource]) {
-        for source in newSources {
-            guard !sources.contains(where: { $0.url == source.url && $0.displayTitle == source.displayTitle }) else {
-                continue
-            }
-            sources.append(source)
-        }
+        return tools
     }
 }
 

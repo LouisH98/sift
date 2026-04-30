@@ -1,3 +1,4 @@
+import AppKit
 import KeyboardShortcuts
 import ServiceManagement
 import SwiftUI
@@ -17,6 +18,9 @@ struct SettingsView: View {
     @State private var isTestingFoundationModels = false
     @State private var launchAtLoginStatus = SMAppService.mainApp.status
     @State private var launchAtLoginError: String?
+    @State private var isExportingData = false
+    @State private var dataExportMessage: String?
+    @State private var dataExportError: String?
 
     var body: some View {
         Form {
@@ -91,6 +95,28 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Data") {
+                HStack {
+                    Button(isExportingData ? "Exporting..." : "Export data...") {
+                        exportDataWithPicker()
+                    }
+                    .disabled(isExportingData)
+
+                    Spacer()
+                }
+
+                if let dataExportMessage {
+                    Text(dataExportMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                } else if let dataExportError {
+                    Text(dataExportError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
             Section("AI Processing") {
                 Toggle("Enable AI processing", isOn: $settings.isEnabled)
 
@@ -107,6 +133,12 @@ struct SettingsView: View {
                 case .appleFoundationModels:
                     appleFoundationModelsSettings
                 }
+
+                Toggle("Allow chat web search", isOn: $settings.isChatWebSearchEnabled)
+
+                Text("When off, chat uses only your local Sift notebook tools.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 HStack {
                     Button(processor.isBackfilling ? "Processing..." : "Process unprocessed thoughts") {
@@ -256,6 +288,53 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
+        }
+    }
+
+    private func exportDataWithPicker() {
+        dataExportMessage = nil
+        dataExportError = nil
+
+        let panel = NSOpenPanel()
+        panel.title = "Choose Export Folder"
+        panel.message = "Choose where Sift should create the export folder."
+        panel.prompt = "Export"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+
+        guard panel.runModal() == .OK, let destinationDirectory = panel.url else {
+            return
+        }
+
+        isExportingData = true
+        defer {
+            isExportingData = false
+        }
+
+        let didStartAccess = destinationDirectory.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccess {
+                destinationDirectory.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            let bundle = SiftDataExportBundle(
+                schemaVersion: 1,
+                exportedAt: Date(),
+                thoughts: store.thoughts,
+                themes: store.themes,
+                pages: store.pages,
+                dailyDigests: store.dailyDigests,
+                actionItems: store.actionItems
+            )
+            let result = try DataExportService.shared.export(bundle: bundle, to: destinationDirectory)
+            dataExportMessage = "Exported to \(result.folderURL.path)"
+            NSWorkspace.shared.activateFileViewerSelecting([result.folderURL])
+        } catch {
+            dataExportError = "Export failed: \(error.localizedDescription)"
         }
     }
 
