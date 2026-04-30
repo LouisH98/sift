@@ -858,8 +858,15 @@ private struct OpenAIResponsesInitialInput {
     let previousResponseID: String?
 }
 
+private enum OpenAIResponsesConversationMode {
+    case stored
+    case stateless
+}
+
 @MainActor
 private struct OpenAIResponsesAgentClient {
+    private static var statelessProviderKeys = Set<String>()
+
     private let settings: AISettings
     private let session: URLSession
 
@@ -875,31 +882,76 @@ private struct OpenAIResponsesAgentClient {
         runTool: @escaping (AgentToolCall) async -> String,
         onTextDelta: ((String) -> Void)? = nil
     ) async throws -> OpenAIResponsesAgentResult {
-        let initial = initialInput(question: question, history: history)
+        let providerKey = statelessProviderKey
+        let mode: OpenAIResponsesConversationMode = Self.statelessProviderKeys.contains(providerKey) ? .stateless : .stored
+
+        do {
+            return try await run(
+                question: question,
+                history: history,
+                mode: mode,
+                maxToolRounds: maxToolRounds,
+                runTool: runTool,
+                onTextDelta: onTextDelta
+            )
+        } catch {
+            guard mode == .stored, isZeroDataRetentionPreviousResponseError(error) else {
+                throw error
+            }
+
+            debugChatStream("responses previous_response rejected by ZDR; retrying stateless")
+            Self.statelessProviderKeys.insert(providerKey)
+            return try await run(
+                question: question,
+                history: history,
+                mode: .stateless,
+                maxToolRounds: maxToolRounds,
+                runTool: runTool,
+                onTextDelta: onTextDelta
+            )
+        }
+    }
+
+    private func run(
+        question: String,
+        history: [ThoughtChatMessage],
+        mode: OpenAIResponsesConversationMode,
+        maxToolRounds: Int,
+        runTool: @escaping (AgentToolCall) async -> String,
+        onTextDelta: ((String) -> Void)? = nil
+    ) async throws -> OpenAIResponsesAgentResult {
+        let initial = initialInput(question: question, history: history, mode: mode)
         var input = initial.input
         var previousResponseID = initial.previousResponseID
+        let useStoredToolContinuation = mode == .stored && previousResponseID != nil
         var latestText = ""
         var latestResponseID: String?
         var webSources: [ThoughtChatSource] = []
 
-        debugChatStream("responses initial previous_response=\(previousResponseID != nil) input_items=\(input.count)")
+        debugChatStream("responses initial mode=\(mode) previous_response=\(previousResponseID != nil) input_items=\(input.count)")
 
         for _ in 0...maxToolRounds {
             let response = try await createResponse(
                 input: input,
                 previousResponseID: previousResponseID,
+                mode: mode,
                 onTextDelta: onTextDelta
             )
             latestText = response.text
-            latestResponseID = response.id.isEmpty ? nil : response.id
+            latestResponseID = mode == .stored && !response.id.isEmpty ? response.id : nil
             appendUnique(response.webSources, to: &webSources)
+            if useStoredToolContinuation {
+                previousResponseID = response.id.isEmpty ? nil : response.id
+            } else {
+                input.append(contentsOf: response.outputItemsForNextRequest)
+                previousResponseID = nil
+            }
 
             let calls = response.functionCalls
             guard !calls.isEmpty else {
                 return OpenAIResponsesAgentResult(text: latestText, responseID: latestResponseID, webSources: webSources)
             }
 
-            previousResponseID = response.id
             var toolOutputs: [[String: Any]] = []
             for call in calls {
                 let output = await runTool(call)
@@ -909,7 +961,11 @@ private struct OpenAIResponsesAgentClient {
                     "output": output
                 ])
             }
-            input = toolOutputs
+            if useStoredToolContinuation {
+                input = toolOutputs
+            } else {
+                input.append(contentsOf: toolOutputs)
+            }
         }
 
         return OpenAIResponsesAgentResult(
@@ -922,6 +978,7 @@ private struct OpenAIResponsesAgentClient {
     private func createResponse(
         input: [[String: Any]],
         previousResponseID: String?,
+        mode: OpenAIResponsesConversationMode,
         onTextDelta: ((String) -> Void)? = nil
     ) async throws -> OpenAIResponsesEnvelope {
         var payload: [String: Any] = [
@@ -938,6 +995,10 @@ private struct OpenAIResponsesAgentClient {
             payload["previous_response_id"] = previousResponseID
         }
 
+        if mode == .stateless {
+            payload["store"] = false
+        }
+
         if onTextDelta != nil {
             payload["stream"] = true
         }
@@ -952,7 +1013,7 @@ private struct OpenAIResponsesAgentClient {
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         if let onTextDelta {
-            debugChatStream("responses stream request previous_response=\(previousResponseID != nil) input_items=\(input.count)")
+            debugChatStream("responses stream request mode=\(mode) previous_response=\(previousResponseID != nil) input_items=\(input.count)")
             do {
                 let envelope = try await streamResponse(request: request, onTextDelta: onTextDelta)
                 debugChatStream("responses stream success text_chars=\(envelope.text.count) tool_calls=\(envelope.functionCalls.count)")
@@ -1159,7 +1220,8 @@ private struct OpenAIResponsesAgentClient {
 
     private func initialInput(
         question: String,
-        history: [ThoughtChatMessage]
+        history: [ThoughtChatMessage],
+        mode: OpenAIResponsesConversationMode
     ) -> OpenAIResponsesInitialInput {
         var priorMessages = history
             .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -1170,7 +1232,8 @@ private struct OpenAIResponsesAgentClient {
             priorMessages.removeLast()
         }
 
-        if let previousResponseID = priorMessages.reversed().compactMap(\.responseID).first {
+        if mode == .stored,
+           let previousResponseID = priorMessages.reversed().compactMap(\.responseID).first {
             return OpenAIResponsesInitialInput(
                 input: [messageInput(role: "user", text: question)],
                 previousResponseID: previousResponseID
@@ -1396,6 +1459,26 @@ private struct OpenAIResponsesAgentClient {
         try? JSONDecoder().decode(OpenAIAgentErrorEnvelope.self, from: data).error.message
     }
 
+    private var statelessProviderKey: String {
+        [
+            settings.apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            settings.modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        ].joined(separator: "|")
+    }
+
+    private func isZeroDataRetentionPreviousResponseError(_ error: Error) -> Bool {
+        let message: String
+        if case OpenAIClientError.apiError(let apiMessage) = error {
+            message = apiMessage
+        } else {
+            message = error.localizedDescription
+        }
+
+        let normalized = message.lowercased()
+        return normalized.contains("zero data retention")
+            && normalized.contains("previous response")
+    }
+
     private func appendUnique(_ newSources: [ThoughtChatSource], to sources: inout [ThoughtChatSource]) {
         for source in newSources {
             guard !sources.contains(where: { $0.url == source.url && $0.displayTitle == source.displayTitle }) else {
@@ -1439,6 +1522,10 @@ private struct OpenAIResponsesEnvelope: Decodable {
         output.flatMap(\.webSources)
     }
 
+    var outputItemsForNextRequest: [[String: Any]] {
+        output.map(\.rawJSONObject)
+    }
+
     var text: String {
         if let outputText, !outputText.isEmpty {
             return outputText
@@ -1458,6 +1545,7 @@ private struct OpenAIResponseOutputItem: Decodable {
     let name: String?
     let arguments: String?
     let content: [OpenAIResponseContent]?
+    let rawValue: [String: OpenAIJSONValue]
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -1467,12 +1555,32 @@ private struct OpenAIResponseOutputItem: Decodable {
         case content
     }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decode(String.self, forKey: .type)
+        callID = try container.decodeIfPresent(String.self, forKey: .callID)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        arguments = try container.decodeIfPresent(String.self, forKey: .arguments)
+        content = try container.decodeIfPresent([OpenAIResponseContent].self, forKey: .content)
+
+        let rawContainer = try decoder.container(keyedBy: OpenAIRawCodingKey.self)
+        var rawValue: [String: OpenAIJSONValue] = [:]
+        for key in rawContainer.allKeys {
+            rawValue[key.stringValue] = try rawContainer.decode(OpenAIJSONValue.self, forKey: key)
+        }
+        self.rawValue = rawValue
+    }
+
     var webSources: [ThoughtChatSource] {
         guard type == "message" else {
             return []
         }
 
         return (content ?? []).flatMap(\.webSources)
+    }
+
+    var rawJSONObject: [String: Any] {
+        rawValue.mapValues(\.jsonObject)
     }
 }
 
@@ -1512,4 +1620,76 @@ private struct OpenAIAgentErrorEnvelope: Decodable {
     }
 
     let error: APIError
+}
+
+private struct OpenAIRawCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+        intValue = nil
+    }
+
+    init?(intValue: Int) {
+        stringValue = String(intValue)
+        self.intValue = intValue
+    }
+}
+
+private enum OpenAIJSONValue: Decodable {
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case object([String: OpenAIJSONValue])
+    case array([OpenAIJSONValue])
+    case null
+
+    init(from decoder: Decoder) throws {
+        if let container = try? decoder.container(keyedBy: OpenAIRawCodingKey.self) {
+            var object: [String: OpenAIJSONValue] = [:]
+            for key in container.allKeys {
+                object[key.stringValue] = try container.decode(OpenAIJSONValue.self, forKey: key)
+            }
+            self = .object(object)
+            return
+        }
+
+        if var container = try? decoder.unkeyedContainer() {
+            var array: [OpenAIJSONValue] = []
+            while !container.isAtEnd {
+                array.append(try container.decode(OpenAIJSONValue.self))
+            }
+            self = .array(array)
+            return
+        }
+
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else {
+            self = .string(try container.decode(String.self))
+        }
+    }
+
+    var jsonObject: Any {
+        switch self {
+        case .string(let value):
+            return value
+        case .number(let value):
+            return value
+        case .bool(let value):
+            return value
+        case .object(let value):
+            return value.mapValues(\.jsonObject)
+        case .array(let value):
+            return value.map(\.jsonObject)
+        case .null:
+            return NSNull()
+        }
+    }
 }

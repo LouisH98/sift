@@ -304,7 +304,8 @@ struct OpenAIClient: ThoughtAIProvider {
             ],
             "text": [
                 "format": jsonSchemaFormat(name: schemaName, schema: schema)
-            ]
+            ],
+            "store": false
         ]
     }
 
