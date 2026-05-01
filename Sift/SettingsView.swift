@@ -21,9 +21,6 @@ struct SettingsView: View {
     @State private var isExportingData = false
     @State private var dataExportMessage: String?
     @State private var dataExportError: String?
-    @State private var isImportingAPIKeyFromShell = false
-    @State private var apiKeyImportMessage: String?
-    @State private var apiKeyImportError: String?
 
     var body: some View {
         Form {
@@ -171,6 +168,7 @@ struct SettingsView: View {
         .frame(width: 460)
         .task {
             settings.loadAPIKeyIfNeeded()
+            await settings.loadEnvironmentAPIKeyFromShellIfNeeded()
             await loadModelsIfNeeded()
         }
         .onAppear {
@@ -191,6 +189,11 @@ struct SettingsView: View {
                 Task {
                     await loadModelsIfNeeded()
                 }
+            }
+        }
+        .onChange(of: settings.apiKeySource) { _, _ in
+            Task {
+                await settings.loadEnvironmentAPIKeyFromShellIfNeeded(force: true)
             }
         }
     }
@@ -368,31 +371,26 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Environment variable")
 
-                HStack(alignment: .center) {
-                    TextField("Environment variable", text: $settings.apiKeyEnvironmentVariableName)
-                        .labelsHidden()
-                        .textFieldStyle(.roundedBorder)
-
-                    Button(isImportingAPIKeyFromShell ? "Importing..." : "Import from shell") {
-                        Task {
-                            await importAPIKeyFromShell()
-                        }
-                    }
-                    .disabled(isImportingAPIKeyFromShell)
-                }
+                TextField("Environment variable", text: $settings.apiKeyEnvironmentVariableName)
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
             }
 
-            Text("Env mode reads the app process environment. Import from shell runs your login shell once, saves the value in Keychain, and switches back to API key mode.")
+            Text("Env mode reads the app environment first. At startup, Sift also asks your login shell for this variable and keeps the value in memory.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
 
-        if let apiKeyImportMessage {
-            Text(apiKeyImportMessage)
+        if settings.isLoadingShellEnvironmentAPIKey {
+            Text("Loading API key from shell...")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        } else if let apiKeyImportError {
-            Text(apiKeyImportError)
+        } else if let shellEnvironmentAPIKeyMessage = settings.shellEnvironmentAPIKeyMessage {
+            Text(shellEnvironmentAPIKeyMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if let shellEnvironmentAPIKeyError = settings.shellEnvironmentAPIKeyError {
+            Text(shellEnvironmentAPIKeyError)
                 .font(.caption)
                 .foregroundStyle(.red)
         }
@@ -530,25 +528,6 @@ struct SettingsView: View {
         }
 
         isLoadingModels = false
-    }
-
-    private func importAPIKeyFromShell() async {
-        isImportingAPIKeyFromShell = true
-        apiKeyImportMessage = nil
-        apiKeyImportError = nil
-
-        let variableName = settings.apiKeyEnvironmentVariableName.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        do {
-            let apiKey = try await ShellEnvironmentImporter().importValue(named: variableName)
-            settings.apiKey = apiKey
-            settings.apiKeySource = .manual
-            apiKeyImportMessage = "Imported \(variableName) from shell into Keychain."
-        } catch {
-            apiKeyImportError = error.localizedDescription
-        }
-
-        isImportingAPIKeyFromShell = false
     }
 
     private func testFoundationModels() async {

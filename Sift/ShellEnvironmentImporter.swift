@@ -1,6 +1,6 @@
 import Foundation
 
-enum ShellEnvironmentImporterError: LocalizedError {
+enum ShellEnvironmentReaderError: LocalizedError {
     case invalidEnvironmentVariableName
     case unsupportedShell(String)
     case shellLaunchFailed
@@ -14,13 +14,13 @@ enum ShellEnvironmentImporterError: LocalizedError {
         case .invalidEnvironmentVariableName:
             "Enter a valid environment variable name."
         case .unsupportedShell(let shell):
-            "Import from shell does not support \(shell)."
+            "Shell environment reading does not support \(shell)."
         case .shellLaunchFailed:
             "Could not start your login shell."
         case .shellTimedOut:
-            "Shell import timed out."
+            "Shell environment read timed out."
         case .shellFailed(let detail):
-            detail.isEmpty ? "Shell import failed." : "Shell import failed: \(detail)"
+            detail.isEmpty ? "Shell environment read failed." : "Shell environment read failed: \(detail)"
         case .missingValue(let name):
             "Shell did not return \(name)."
         case .unreadableOutput:
@@ -46,7 +46,7 @@ private final class ContinuationGate<Value>: @unchecked Sendable {
     }
 }
 
-struct ShellEnvironmentImporter {
+struct ShellEnvironmentReader {
     enum ShellKind: Equatable {
         case zsh
         case bash
@@ -67,22 +67,22 @@ struct ShellEnvironmentImporter {
         self.timeout = timeout
     }
 
-    func importValue(named rawName: String) async throws -> String {
+    func readValue(named rawName: String) async throws -> String {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.isValidEnvironmentVariableName(name) else {
-            throw ShellEnvironmentImporterError.invalidEnvironmentVariableName
+            throw ShellEnvironmentReaderError.invalidEnvironmentVariableName
         }
 
         let kind = Self.shellKind(for: shellPath)
         guard kind != .unsupported else {
-            throw ShellEnvironmentImporterError.unsupportedShell(shellPath)
+            throw ShellEnvironmentReaderError.unsupportedShell(shellPath)
         }
 
         let command = try Self.command(for: name, shellKind: kind)
         let output = try await runShell(arguments: Self.arguments(for: command, shellKind: kind))
         let value = try Self.extractValue(from: output).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else {
-            throw ShellEnvironmentImporterError.missingValue(name)
+            throw ShellEnvironmentReaderError.missingValue(name)
         }
 
         return value
@@ -104,14 +104,14 @@ struct ShellEnvironmentImporter {
                 let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
                 let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
                 guard let output = String(data: outputData, encoding: .utf8) else {
-                    gate.resume(.failure(ShellEnvironmentImporterError.unreadableOutput), continuation: continuation)
+                    gate.resume(.failure(ShellEnvironmentReaderError.unreadableOutput), continuation: continuation)
                     return
                 }
 
                 guard process.terminationStatus == 0 else {
                     let detail = String(data: errorData, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    gate.resume(.failure(ShellEnvironmentImporterError.shellFailed(detail)), continuation: continuation)
+                    gate.resume(.failure(ShellEnvironmentReaderError.shellFailed(detail)), continuation: continuation)
                     return
                 }
 
@@ -121,7 +121,7 @@ struct ShellEnvironmentImporter {
             do {
                 try process.run()
             } catch {
-                gate.resume(.failure(ShellEnvironmentImporterError.shellLaunchFailed), continuation: continuation)
+                gate.resume(.failure(ShellEnvironmentReaderError.shellLaunchFailed), continuation: continuation)
                 return
             }
 
@@ -131,7 +131,7 @@ struct ShellEnvironmentImporter {
                 }
 
                 process.terminate()
-                gate.resume(.failure(ShellEnvironmentImporterError.shellTimedOut), continuation: continuation)
+                gate.resume(.failure(ShellEnvironmentReaderError.shellTimedOut), continuation: continuation)
             }
         }
     }
@@ -181,7 +181,7 @@ struct ShellEnvironmentImporter {
 
     static func command(for name: String, shellKind: ShellKind) throws -> String {
         guard isValidEnvironmentVariableName(name) else {
-            throw ShellEnvironmentImporterError.invalidEnvironmentVariableName
+            throw ShellEnvironmentReaderError.invalidEnvironmentVariableName
         }
 
         switch shellKind {
@@ -192,7 +192,7 @@ struct ShellEnvironmentImporter {
         case .tcsh:
             return "if ($?\(name)) printf '\\n\(startMarker)%s\(endMarker)\\n' \"$\(name)\"; else printf '\\n\(startMarker)\(endMarker)\\n'; endif"
         case .unsupported:
-            throw ShellEnvironmentImporterError.unsupportedShell("")
+            throw ShellEnvironmentReaderError.unsupportedShell("")
         }
     }
 
@@ -212,7 +212,7 @@ struct ShellEnvironmentImporter {
     static func extractValue(from output: String) throws -> String {
         guard let startRange = output.range(of: startMarker),
               let endRange = output.range(of: endMarker, range: startRange.upperBound..<output.endIndex) else {
-            throw ShellEnvironmentImporterError.unreadableOutput
+            throw ShellEnvironmentReaderError.unreadableOutput
         }
 
         return String(output[startRange.upperBound..<endRange.lowerBound])

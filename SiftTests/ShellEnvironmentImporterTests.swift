@@ -2,29 +2,29 @@ import XCTest
 @testable import Sift
 
 @MainActor
-final class ShellEnvironmentImporterTests: XCTestCase {
+final class ShellEnvironmentReaderTests: XCTestCase {
     func testEnvironmentVariableNameValidationAllowsShellSafeNames() {
-        XCTAssertTrue(ShellEnvironmentImporter.isValidEnvironmentVariableName("OPENAI_API_KEY"))
-        XCTAssertTrue(ShellEnvironmentImporter.isValidEnvironmentVariableName("_OPENAI_API_KEY_2"))
+        XCTAssertTrue(ShellEnvironmentReader.isValidEnvironmentVariableName("OPENAI_API_KEY"))
+        XCTAssertTrue(ShellEnvironmentReader.isValidEnvironmentVariableName("_OPENAI_API_KEY_2"))
     }
 
     func testEnvironmentVariableNameValidationRejectsUnsafeNames() {
-        XCTAssertFalse(ShellEnvironmentImporter.isValidEnvironmentVariableName(""))
-        XCTAssertFalse(ShellEnvironmentImporter.isValidEnvironmentVariableName("2OPENAI_API_KEY"))
-        XCTAssertFalse(ShellEnvironmentImporter.isValidEnvironmentVariableName("OPENAI-API-KEY"))
-        XCTAssertFalse(ShellEnvironmentImporter.isValidEnvironmentVariableName("OPENAI_API_KEY; echo bad"))
-        XCTAssertFalse(ShellEnvironmentImporter.isValidEnvironmentVariableName("ÖPENAI_API_KEY"))
+        XCTAssertFalse(ShellEnvironmentReader.isValidEnvironmentVariableName(""))
+        XCTAssertFalse(ShellEnvironmentReader.isValidEnvironmentVariableName("2OPENAI_API_KEY"))
+        XCTAssertFalse(ShellEnvironmentReader.isValidEnvironmentVariableName("OPENAI-API-KEY"))
+        XCTAssertFalse(ShellEnvironmentReader.isValidEnvironmentVariableName("OPENAI_API_KEY; echo bad"))
+        XCTAssertFalse(ShellEnvironmentReader.isValidEnvironmentVariableName("ÖPENAI_API_KEY"))
     }
 
     func testShellKindDetectionUsesExecutableName() {
-        XCTAssertEqual(ShellEnvironmentImporter.shellKind(for: "/bin/zsh"), .zsh)
-        XCTAssertEqual(ShellEnvironmentImporter.shellKind(for: "/opt/homebrew/bin/fish"), .fish)
-        XCTAssertEqual(ShellEnvironmentImporter.shellKind(for: "/bin/tcsh"), .tcsh)
-        XCTAssertEqual(ShellEnvironmentImporter.shellKind(for: "/custom/shell"), .unsupported)
+        XCTAssertEqual(ShellEnvironmentReader.shellKind(for: "/bin/zsh"), .zsh)
+        XCTAssertEqual(ShellEnvironmentReader.shellKind(for: "/opt/homebrew/bin/fish"), .fish)
+        XCTAssertEqual(ShellEnvironmentReader.shellKind(for: "/bin/tcsh"), .tcsh)
+        XCTAssertEqual(ShellEnvironmentReader.shellKind(for: "/custom/shell"), .unsupported)
     }
 
     func testCommandContainsMarkersAndValidatedVariableName() throws {
-        let command = try ShellEnvironmentImporter.command(for: "OPENAI_API_KEY", shellKind: .zsh)
+        let command = try ShellEnvironmentReader.command(for: "OPENAI_API_KEY", shellKind: .zsh)
 
         XCTAssertTrue(command.contains("__SIFT_ENV_START__"))
         XCTAssertTrue(command.contains("__SIFT_ENV_END__"))
@@ -38,6 +38,6 @@ final class ShellEnvironmentImporterTests: XCTestCase {
         Prompt text
         """
 
-        XCTAssertEqual(try ShellEnvironmentImporter.extractValue(from: output), "sk-shell")
+        XCTAssertEqual(try ShellEnvironmentReader.extractValue(from: output), "sk-shell")
     }
 }

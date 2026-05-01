@@ -7,6 +7,13 @@ struct SiftApp: App {
     @StateObject private var store = ThoughtStore.shared
     @StateObject private var processor = ThoughtProcessor.shared
 
+    init() {
+        Task { @MainActor in
+            AISettings.shared.loadAPIKeyIfNeeded()
+            await AISettings.shared.loadEnvironmentAPIKeyFromShellIfNeeded()
+        }
+    }
+
     var body: some Scene {
         MenuBarExtra {
             Button("Capture Thought") {

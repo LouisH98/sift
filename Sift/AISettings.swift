@@ -92,14 +92,24 @@ final class AISettings: ObservableObject {
     @Published var apiKeySource: APIKeySource {
         didSet {
             UserDefaults.standard.set(apiKeySource.rawValue, forKey: Keys.apiKeySource)
+            if apiKeySource != .environmentVariable {
+                clearShellEnvironmentAPIKey()
+            }
         }
     }
 
     @Published var apiKeyEnvironmentVariableName: String {
         didSet {
             UserDefaults.standard.set(apiKeyEnvironmentVariableName, forKey: Keys.apiKeyEnvironmentVariableName)
+            if apiKeyEnvironmentVariableName != oldValue {
+                clearShellEnvironmentAPIKey()
+            }
         }
     }
+
+    @Published private(set) var isLoadingShellEnvironmentAPIKey = false
+    @Published private(set) var shellEnvironmentAPIKeyMessage: String?
+    @Published private(set) var shellEnvironmentAPIKeyError: String?
 
     @Published var isChatWebSearchEnabled: Bool {
         didSet {
@@ -119,6 +129,8 @@ final class AISettings: ObservableObject {
 
     private var hasLoadedAPIKey = false
     private var isLoadingAPIKey = false
+    private var shellEnvironmentAPIKey = ""
+    private var loadedShellEnvironmentAPIKeyName: String?
 
     var canProcess: Bool {
         guard isEnabled else {
@@ -163,12 +175,13 @@ final class AISettings: ObservableObject {
                 environment: environment
             )
         case .environmentVariable:
-            return Self.resolvedAPIKey(
+            let processEnvironmentAPIKey = Self.resolvedAPIKey(
                 source: .environmentVariable,
                 manualAPIKey: "",
                 environmentVariableName: apiKeyEnvironmentVariableName,
                 environment: environment
             )
+            return processEnvironmentAPIKey.isEmpty ? shellEnvironmentAPIKey.trimmingCharacters(in: .whitespacesAndNewlines) : processEnvironmentAPIKey
         }
     }
 
@@ -189,6 +202,78 @@ final class AISettings: ObservableObject {
 
             return environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         }
+    }
+
+    func loadEnvironmentAPIKeyFromShellIfNeeded(force: Bool = false) async {
+        guard apiKeySource == .environmentVariable else {
+            clearShellEnvironmentAPIKey()
+            return
+        }
+
+        let variableName = apiKeyEnvironmentVariableName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard ShellEnvironmentReader.isValidEnvironmentVariableName(variableName) else {
+            isLoadingShellEnvironmentAPIKey = false
+            shellEnvironmentAPIKey = ""
+            loadedShellEnvironmentAPIKeyName = nil
+            shellEnvironmentAPIKeyMessage = nil
+            shellEnvironmentAPIKeyError = "Enter a valid environment variable name."
+            return
+        }
+
+        if !force, loadedShellEnvironmentAPIKeyName == variableName {
+            return
+        }
+
+        let processEnvironmentAPIKey = Self.resolvedAPIKey(
+            source: .environmentVariable,
+            manualAPIKey: "",
+            environmentVariableName: variableName,
+            environment: ProcessInfo.processInfo.environment
+        )
+
+        if !processEnvironmentAPIKey.isEmpty {
+            isLoadingShellEnvironmentAPIKey = false
+            shellEnvironmentAPIKey = processEnvironmentAPIKey
+            loadedShellEnvironmentAPIKeyName = variableName
+            shellEnvironmentAPIKeyMessage = "Loaded \(variableName) from the app environment."
+            shellEnvironmentAPIKeyError = nil
+            return
+        }
+
+        isLoadingShellEnvironmentAPIKey = true
+        shellEnvironmentAPIKeyMessage = nil
+        shellEnvironmentAPIKeyError = nil
+
+        do {
+            let apiKey = try await ShellEnvironmentReader().readValue(named: variableName)
+            guard apiKeySource == .environmentVariable,
+                  apiKeyEnvironmentVariableName.trimmingCharacters(in: .whitespacesAndNewlines) == variableName else {
+                return
+            }
+
+            shellEnvironmentAPIKey = apiKey
+            loadedShellEnvironmentAPIKeyName = variableName
+            shellEnvironmentAPIKeyMessage = "Loaded \(variableName) from your login shell."
+        } catch {
+            guard apiKeySource == .environmentVariable,
+                  apiKeyEnvironmentVariableName.trimmingCharacters(in: .whitespacesAndNewlines) == variableName else {
+                return
+            }
+
+            shellEnvironmentAPIKey = ""
+            loadedShellEnvironmentAPIKeyName = nil
+            shellEnvironmentAPIKeyError = error.localizedDescription
+        }
+
+        isLoadingShellEnvironmentAPIKey = false
+    }
+
+    private func clearShellEnvironmentAPIKey() {
+        shellEnvironmentAPIKey = ""
+        loadedShellEnvironmentAPIKeyName = nil
+        isLoadingShellEnvironmentAPIKey = false
+        shellEnvironmentAPIKeyMessage = nil
+        shellEnvironmentAPIKeyError = nil
     }
 
     private init() {
