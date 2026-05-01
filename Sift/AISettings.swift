@@ -23,6 +23,24 @@ final class AISettings: ObservableObject {
         }
     }
 
+    enum APIKeySource: String, CaseIterable, Identifiable {
+        case manual
+        case environmentVariable
+
+        var id: String {
+            rawValue
+        }
+
+        var displayName: String {
+            switch self {
+            case .manual:
+                "API key"
+            case .environmentVariable:
+                "Env var"
+            }
+        }
+    }
+
     private enum Keys {
         static let isEnabled = "ai.isEnabled"
         static let providerKind = "ai.providerKind"
@@ -30,6 +48,8 @@ final class AISettings: ObservableObject {
         static let apiEndpoint = "ai.apiEndpoint"
         static let modelID = "ai.modelID"
         static let apiKey = "openai.apiKey"
+        static let apiKeySource = "openai.apiKeySource"
+        static let apiKeyEnvironmentVariableName = "openai.apiKeyEnvironmentVariableName"
         static let isChatWebSearchEnabled = "ai.chatWebSearchEnabled"
     }
 
@@ -37,6 +57,7 @@ final class AISettings: ObservableObject {
     static let defaultAPIEndpoint = APIEndpoint.responses
     static let defaultModelID = "gpt-5.4-mini"
     static let defaultProviderKind = ThoughtAIProviderKind.openAICompatible
+    static let defaultAPIKeyEnvironmentVariableName = "OPENAI_API_KEY"
 
     @Published var isEnabled: Bool {
         didSet {
@@ -65,6 +86,18 @@ final class AISettings: ObservableObject {
     @Published var modelID: String {
         didSet {
             UserDefaults.standard.set(modelID, forKey: Keys.modelID)
+        }
+    }
+
+    @Published var apiKeySource: APIKeySource {
+        didSet {
+            UserDefaults.standard.set(apiKeySource.rawValue, forKey: Keys.apiKeySource)
+        }
+    }
+
+    @Published var apiKeyEnvironmentVariableName: String {
+        didSet {
+            UserDefaults.standard.set(apiKeyEnvironmentVariableName, forKey: Keys.apiKeyEnvironmentVariableName)
         }
     }
 
@@ -120,6 +153,44 @@ final class AISettings: ObservableObject {
         return apiKey
     }
 
+    func resolvedAPIKey(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+        switch apiKeySource {
+        case .manual:
+            return Self.resolvedAPIKey(
+                source: .manual,
+                manualAPIKey: loadAPIKeyIfNeeded(),
+                environmentVariableName: apiKeyEnvironmentVariableName,
+                environment: environment
+            )
+        case .environmentVariable:
+            return Self.resolvedAPIKey(
+                source: .environmentVariable,
+                manualAPIKey: "",
+                environmentVariableName: apiKeyEnvironmentVariableName,
+                environment: environment
+            )
+        }
+    }
+
+    static func resolvedAPIKey(
+        source: APIKeySource,
+        manualAPIKey: String,
+        environmentVariableName: String,
+        environment: [String: String]
+    ) -> String {
+        switch source {
+        case .manual:
+            return manualAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .environmentVariable:
+            let key = environmentVariableName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else {
+                return ""
+            }
+
+            return environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+    }
+
     private init() {
         isEnabled = UserDefaults.standard.bool(forKey: Keys.isEnabled)
         providerKind = UserDefaults.standard.string(forKey: Keys.providerKind)
@@ -128,6 +199,10 @@ final class AISettings: ObservableObject {
         apiEndpoint = UserDefaults.standard.string(forKey: Keys.apiEndpoint)
             .flatMap(APIEndpoint.init(rawValue:)) ?? Self.defaultAPIEndpoint
         modelID = UserDefaults.standard.string(forKey: Keys.modelID) ?? Self.defaultModelID
+        apiKeySource = UserDefaults.standard.string(forKey: Keys.apiKeySource)
+            .flatMap(APIKeySource.init(rawValue:)) ?? .manual
+        apiKeyEnvironmentVariableName = UserDefaults.standard.string(forKey: Keys.apiKeyEnvironmentVariableName)
+            ?? Self.defaultAPIKeyEnvironmentVariableName
         isChatWebSearchEnabled = UserDefaults.standard.bool(forKey: Keys.isChatWebSearchEnabled)
         apiKey = ""
     }

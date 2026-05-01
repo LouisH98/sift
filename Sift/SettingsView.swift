@@ -350,8 +350,25 @@ struct SettingsView: View {
         }
         .pickerStyle(.menu)
 
-        SecureField("API key", text: $settings.apiKey)
-            .textFieldStyle(.roundedBorder)
+        Picker("API key source", selection: $settings.apiKeySource) {
+            ForEach(AISettings.APIKeySource.allCases) { source in
+                Text(source.displayName).tag(source)
+            }
+        }
+        .pickerStyle(.segmented)
+
+        switch settings.apiKeySource {
+        case .manual:
+            SecureField("API key", text: $settings.apiKey)
+                .textFieldStyle(.roundedBorder)
+        case .environmentVariable:
+            TextField("Environment variable", text: $settings.apiKeyEnvironmentVariableName)
+                .textFieldStyle(.roundedBorder)
+
+            Text("Read from the app process environment. Default: \(AISettings.defaultAPIKeyEnvironmentVariableName).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
 
         modelSelector
     }

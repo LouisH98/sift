@@ -260,7 +260,7 @@ struct OpenAIClient: ThoughtAIProvider {
 
     private func authenticatedRequest(url: URL) -> URLRequest {
         var request = URLRequest(url: url)
-        let apiKey = settings.loadAPIKeyIfNeeded().trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = settings.resolvedAPIKey()
         if !apiKey.isEmpty {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }

@@ -64,7 +64,7 @@ Run the test suite from the repo root:
 
 Open Sift from the menu bar, go to Settings, and enable AI processing.
 
-For the OpenAI-compatible provider, configure the API base URL, API endpoint, model, and API key. The default base URL is:
+For the OpenAI-compatible provider, configure the API base URL, API endpoint, model, and API key source. You can enter an API key directly or read it from an environment variable such as `OPENAI_API_KEY`. The default base URL is:
 
 ```text
 https://api.openai.com/v1
