@@ -21,6 +21,9 @@ struct SettingsView: View {
     @State private var isExportingData = false
     @State private var dataExportMessage: String?
     @State private var dataExportError: String?
+    @State private var isImportingAPIKeyFromShell = false
+    @State private var apiKeyImportMessage: String?
+    @State private var apiKeyImportError: String?
 
     var body: some View {
         Form {
@@ -362,12 +365,36 @@ struct SettingsView: View {
             SecureField("API key", text: $settings.apiKey)
                 .textFieldStyle(.roundedBorder)
         case .environmentVariable:
-            TextField("Environment variable", text: $settings.apiKeyEnvironmentVariableName)
-                .textFieldStyle(.roundedBorder)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Environment variable")
 
-            Text("Read from the app process environment. Default: \(AISettings.defaultAPIKeyEnvironmentVariableName).")
+                HStack(alignment: .center) {
+                    TextField("Environment variable", text: $settings.apiKeyEnvironmentVariableName)
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+
+                    Button(isImportingAPIKeyFromShell ? "Importing..." : "Import from shell") {
+                        Task {
+                            await importAPIKeyFromShell()
+                        }
+                    }
+                    .disabled(isImportingAPIKeyFromShell)
+                }
+            }
+
+            Text("Env mode reads the app process environment. Import from shell runs your login shell once, saves the value in Keychain, and switches back to API key mode.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+
+        if let apiKeyImportMessage {
+            Text(apiKeyImportMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if let apiKeyImportError {
+            Text(apiKeyImportError)
+                .font(.caption)
+                .foregroundStyle(.red)
         }
 
         modelSelector
@@ -503,6 +530,25 @@ struct SettingsView: View {
         }
 
         isLoadingModels = false
+    }
+
+    private func importAPIKeyFromShell() async {
+        isImportingAPIKeyFromShell = true
+        apiKeyImportMessage = nil
+        apiKeyImportError = nil
+
+        let variableName = settings.apiKeyEnvironmentVariableName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        do {
+            let apiKey = try await ShellEnvironmentImporter().importValue(named: variableName)
+            settings.apiKey = apiKey
+            settings.apiKeySource = .manual
+            apiKeyImportMessage = "Imported \(variableName) from shell into Keychain."
+        } catch {
+            apiKeyImportError = error.localizedDescription
+        }
+
+        isImportingAPIKeyFromShell = false
     }
 
     private func testFoundationModels() async {

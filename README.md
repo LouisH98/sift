@@ -64,13 +64,15 @@ Run the test suite from the repo root:
 
 Open Sift from the menu bar, go to Settings, and enable AI processing.
 
-For the OpenAI-compatible provider, configure the API base URL, API endpoint, model, and API key source. You can enter an API key directly or read it from an environment variable such as `OPENAI_API_KEY`. The default base URL is:
+For the OpenAI-compatible provider, configure the API base URL, API endpoint, model, and API key source. You can enter an API key directly, read it from the app process environment, or import a key from your login shell into Keychain. The default base URL is:
 
 ```text
 https://api.openai.com/v1
 ```
 
 You can also choose Apple Foundation Models on a compatible macOS 26 Apple Intelligence setup.
+
+Environment variables from `.zshrc`, `.bashrc`, or other shell startup files are not visible to Sift when it is launched from Finder, Spotlight, or Login Items. Use **Import from shell** in Settings to run your configured login shell once, read the named variable such as `OPENAI_API_KEY`, and save the value through the normal Keychain-backed API key setting.
 
 ## Data & Privacy
 
