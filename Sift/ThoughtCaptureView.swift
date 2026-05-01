@@ -8,6 +8,7 @@ struct ThoughtCaptureView: View {
     @Binding var text: String
 
     let textTopInset: CGFloat
+    let allowsAutoFocus: Bool
     let onSave: (String) -> Void
     let onCancel: () -> Void
     let onPageDelta: (Int) -> Void
@@ -15,12 +16,14 @@ struct ThoughtCaptureView: View {
     init(
         text: Binding<String>,
         textTopInset: CGFloat = 0,
+        allowsAutoFocus: Bool = true,
         onSave: @escaping (String) -> Void,
         onCancel: @escaping () -> Void,
         onPageDelta: @escaping (Int) -> Void
     ) {
         _text = text
         self.textTopInset = textTopInset
+        self.allowsAutoFocus = allowsAutoFocus
         self.onSave = onSave
         self.onCancel = onCancel
         self.onPageDelta = onPageDelta
@@ -31,6 +34,7 @@ struct ThoughtCaptureView: View {
             CaptureTextView(
                 text: $text,
                 textTopInset: textTopInset,
+                allowsAutoFocus: allowsAutoFocus,
                 placeholder: "What is on your mind?",
                 onSave: save,
                 onCancel: onCancel,
@@ -119,6 +123,7 @@ private struct CaptureTextView: NSViewRepresentable {
     @Binding var text: String
 
     let textTopInset: CGFloat
+    let allowsAutoFocus: Bool
     let placeholder: String
     let onSave: () -> Void
     let onCancel: () -> Void
@@ -171,6 +176,10 @@ private struct CaptureTextView: NSViewRepresentable {
         (scrollView as? CaptureScrollView)?.onPageDelta = onPageDelta
 
         DispatchQueue.main.async {
+            guard allowsAutoFocus else {
+                return
+            }
+
             guard let window = textView.window else {
                 return
             }

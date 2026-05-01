@@ -320,6 +320,7 @@ struct NotchView: View {
                             ThoughtCaptureView(
                                 text: $model.captureDraft,
                                 textTopInset: captureTextTopInset,
+                                allowsAutoFocus: model.isOpen && model.isContentPresented,
                                 onSave: onSave,
                                 onCancel: onCancel,
                                 onPageDelta: onPageDelta

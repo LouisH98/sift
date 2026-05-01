@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import KeyboardShortcuts
 import SwiftUI
 
 @MainActor
@@ -43,6 +44,7 @@ final class NotchPanelController {
     private let topEdgePushMaximumGap: TimeInterval = 0.24
     private let topEdgePushMinimumDuration: TimeInterval = 0.18
     private let topEdgeIntentionalBandHeight: CGFloat = 4
+    private let shortcutModifierMask = NSEvent.ModifierFlags([.command, .option, .control, .shift])
 
     init(store: ThoughtStore) {
         self.store = store
@@ -131,15 +133,7 @@ final class NotchPanelController {
         startScrollEventMonitor()
         PageNavigationShortcut.activateRegisteredShortcuts()
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.targetIsOpen else {
-                return
-            }
-
-            self.animationModel.open()
-            self.focusCaptureTextView()
-        }
-
+        animationModel.open()
         scheduleCurrentPageFocus()
     }
 
@@ -482,6 +476,11 @@ final class NotchPanelController {
                 return event
             }
 
+            if self.isToggleShortcut(event) {
+                self.toggle()
+                return nil
+            }
+
             if self.handleActionKeyDown(event) {
                 return nil
             }
@@ -650,6 +649,7 @@ final class NotchPanelController {
 
     private func focusCaptureTextView() {
         guard
+            targetIsOpen,
             animationModel.selectedPage == .capture,
             let panel,
             panel.isVisible
@@ -692,6 +692,7 @@ final class NotchPanelController {
 
     private func focusActionKeyboardCatcher() {
         guard
+            targetIsOpen,
             animationModel.selectedPage == .actions,
             let panel,
             panel.isVisible
@@ -723,6 +724,7 @@ final class NotchPanelController {
 
     private func focusChatInput() {
         guard
+            targetIsOpen,
             animationModel.selectedPage == .chat,
             let panel,
             panel.isVisible
@@ -858,6 +860,17 @@ final class NotchPanelController {
         #else
         false
         #endif
+    }
+
+    private func isToggleShortcut(_ event: NSEvent) -> Bool {
+        guard let shortcut = KeyboardShortcuts.getShortcut(for: .toggleNotch) else {
+            return false
+        }
+
+        let eventModifiers = event.modifierFlags.intersection(shortcutModifierMask)
+        let shortcutModifiers = shortcut.modifiers.intersection(shortcutModifierMask)
+
+        return Int(event.keyCode) == shortcut.carbonKeyCode && eventModifiers == shortcutModifiers
     }
 
     private func observeDebugSettings() {
