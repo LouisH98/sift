@@ -65,6 +65,7 @@ struct NotchActivationView: View {
     @ObservedObject var model: NotchActivationHoverModel
     @ObservedObject var appearanceSettings: NotchAppearanceSettings
     @ObservedObject var processor: ThoughtProcessor
+    @ObservedObject var notchModel: NotchAnimationModel
     @State private var processingFadeStartedAt: TimeInterval?
 
     let notchSize: CGSize
@@ -85,12 +86,16 @@ struct NotchActivationView: View {
         processor.notchProcessingState.isDistilling
     }
 
+    private var canRenderProcessingGlow: Bool {
+        !notchModel.isPanelVisible
+    }
+
     private var isProcessingGlowActive: Bool {
-        isDistilling || processingFadeStartedAt != nil
+        canRenderProcessingGlow && (isDistilling || processingFadeStartedAt != nil)
     }
 
     private var processingGlowStrength: CGFloat {
-        guard appearanceSettings.isGlowEnabled, isDistilling else {
+        guard appearanceSettings.isGlowEnabled, canRenderProcessingGlow, isDistilling else {
             return 0
         }
 
@@ -135,6 +140,18 @@ struct NotchActivationView: View {
         usesTopEdgeLine ? .topEdgeLine : .notch
     }
 
+    private var glowStrengthAnimation: Animation? {
+        if isDistilling {
+            return nil
+        }
+
+        if processingFadeStartedAt != nil {
+            return .smooth(duration: NotchProcessingGlowFade.duration)
+        }
+
+        return .smooth(duration: 0.08)
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             if appearanceSettings.isGlowEnabled {
@@ -154,15 +171,21 @@ struct NotchActivationView: View {
                     glowField(strength: displayedGlowStrength, colorMotion: glowColorMotion)
                 }
 
-                notchSurface
-                    .padding(.top, usesTopEdgeLine ? 0 : -2)
-                    .allowsHitTesting(false)
+                if usesTopEdgeLine {
+                    notchSurface
+                        .allowsHitTesting(false)
+                }
             }
         }
         .frame(width: size.width, height: size.height)
         .preferredColorScheme(.dark)
         .onChange(of: isDistilling) { _, isDistilling in
             updateProcessingFade(isDistilling: isDistilling)
+        }
+        .onChange(of: notchModel.isPanelVisible) { _, isPanelVisible in
+            if isPanelVisible {
+                processingFadeStartedAt = nil
+            }
         }
     }
 
@@ -174,7 +197,7 @@ struct NotchActivationView: View {
             colorMotion: colorMotion
         )
             .opacity(strength > 0.01 ? 1 : 0)
-            .animation(.smooth(duration: isDistilling ? 0.18 : NotchProcessingGlowFade.duration), value: strength)
+            .animation(glowStrengthAnimation, value: strength)
             .animation(.smooth(duration: 0.14), value: feedbackSize.width)
             .animation(.smooth(duration: 0.14), value: feedbackSize.height)
             .animation(.smooth(duration: NotchProcessingGlowFade.duration), value: isDistilling)
@@ -182,6 +205,11 @@ struct NotchActivationView: View {
     }
 
     private func updateProcessingFade(isDistilling: Bool) {
+        guard canRenderProcessingGlow else {
+            processingFadeStartedAt = nil
+            return
+        }
+
         if isDistilling {
             processingFadeStartedAt = nil
             return
@@ -204,12 +232,6 @@ struct NotchActivationView: View {
             Capsule()
                 .fill(.clear)
                 .frame(width: feedbackSize.width, height: feedbackSize.height)
-                .overlay {
-                    TopEdgeLineProcessingEffect(
-                        state: processor.notchProcessingState,
-                        metalGlowColor: appearanceSettings.nsGlowColor
-                    )
-                }
                 .animation(.smooth(duration: 0.12), value: model.isHovered)
                 .animation(.smooth(duration: 0.08), value: model.isPressed)
                 .animation(.smooth(duration: 0.14), value: model.activationProgress)
@@ -267,62 +289,6 @@ enum NotchProcessingGlowFade {
         let clamped = max(0, min(1, progress))
 
         return clamped * clamped * clamped * (clamped * ((clamped * 6) - 15) + 10)
-    }
-}
-
-private struct TopEdgeLineProcessingEffect: View {
-    let state: NotchProcessingState
-    let metalGlowColor: NSColor
-
-    @State private var queuedFadeStartedAt: TimeInterval?
-
-    var body: some View {
-        GeometryReader { geometry in
-            TimelineView(.animation(minimumInterval: 1 / 120)) { timeline in
-                let seconds = timeline.date.timeIntervalSinceReferenceDate
-                let queuedFade = queuedFadeProgress(seconds: seconds)
-                let queuedOpacity = state.isSynthesizing ? 1 : max(0, 1 - queuedFade)
-                let processingOpacity = state.isSynthesizing ? queuedOpacity : 0
-                let isVisible = state.isSynthesizing || processingOpacity > 0
-                let phase: CGFloat = 0
-
-                NotchProcessingMetalField(
-                    seconds: seconds,
-                    isDistilling: false,
-                    queuedOpacity: processingOpacity,
-                    completionProgress: 1,
-                    tracerPhase: phase,
-                    topCornerRadius: 0,
-                    bottomCornerRadius: 0,
-                    segmentLength: 0.24,
-                    renderShape: .topEdgeLine,
-                    glowColor: metalGlowColor
-                )
-                .frame(width: geometry.size.width, height: geometry.size.height)
-                .opacity(isVisible ? 1 : 0)
-                .animation(.smooth(duration: 0.28), value: state.isDistilling)
-            }
-        }
-        .compositingGroup()
-        .onChange(of: state.isSynthesizing) { _, isSynthesizing in
-            queuedFadeStartedAt = isSynthesizing ? nil : Date().timeIntervalSinceReferenceDate
-        }
-    }
-
-    private func queuedFadeProgress(seconds: TimeInterval) -> CGFloat {
-        guard let queuedFadeStartedAt else {
-            return 1
-        }
-
-        let duration: TimeInterval = 0.7
-        let elapsed = seconds - queuedFadeStartedAt
-        guard elapsed >= 0, elapsed <= duration else {
-            return 1
-        }
-
-        let progress = CGFloat(elapsed / duration)
-
-        return progress * progress * (3 - (2 * progress))
     }
 }
 

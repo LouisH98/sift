@@ -64,6 +64,7 @@ struct NotchView: View {
     private let pageContentTopPadding: CGFloat = 18
     private let pageChromeHeight: CGFloat = 10
     private let pageChromeSpacing: CGFloat = 10
+    private let closedTopEdgeHeight: CGFloat = 5
 
     private var isNotchedDisplay: Bool {
         !model.hideClosedNotch
@@ -86,7 +87,7 @@ struct NotchView: View {
 
     private var currentSize: CGSize {
         if !model.isOpen && model.hideClosedNotch {
-            return CGSize(width: 96, height: 4)
+            return CGSize(width: model.closedNotchSize.width, height: closedTopEdgeHeight)
         }
 
         return model.isOpen ? openSize : model.closedNotchSize
@@ -137,6 +138,22 @@ struct NotchView: View {
 
     private var glowShape: NotchGlowShape {
         (!model.isOpen && model.hideClosedNotch) ? .topEdgeLine : .notch
+    }
+
+    private var notchShellOpacity: CGFloat {
+        if !model.isOpen && isProcessingGlowActive {
+            return 0
+        }
+
+        return (!model.isOpen && model.hideClosedNotch) ? 0 : 1
+    }
+
+    private var glowStrengthAnimation: Animation? {
+        if isDistilling {
+            return nil
+        }
+
+        return .smooth(duration: NotchProcessingGlowFade.duration)
     }
 
     var body: some View {
@@ -197,7 +214,7 @@ struct NotchView: View {
                         }
                 }
                 .shadow(color: .black.opacity(model.isOpen ? 0.7 : 0), radius: model.isOpen ? 9 : 0, x: 0, y: 6)
-                .opacity((!model.isOpen && model.hideClosedNotch) ? 0 : 1)
+                .opacity(notchShellOpacity)
                 .blur(radius: paneBlurRadius)
                 .animation(model.isOpen ? NotchAnimationModel.openAnimation : NotchAnimationModel.closeAnimation, value: model.isOpen)
                 .animation(NotchAnimationModel.blurAnimation, value: model.isBlurred)
@@ -230,7 +247,7 @@ struct NotchView: View {
         .opacity(strength > 0.01 ? 1 : 0)
         .animation(NotchAnimationModel.openAnimation, value: model.isOpen)
         .animation(NotchAnimationModel.openingGlowAnimation, value: model.transitionGlowStrength)
-        .animation(.smooth(duration: isDistilling ? 0.18 : NotchProcessingGlowFade.duration), value: strength)
+        .animation(glowStrengthAnimation, value: strength)
         .animation(.smooth(duration: NotchProcessingGlowFade.duration), value: isDistilling)
         .allowsHitTesting(false)
     }

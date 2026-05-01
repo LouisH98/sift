@@ -103,6 +103,8 @@ final class NotchPanelController {
         self.panel = panel
         let wasVisible = panel.isVisible
 
+        animationModel.setPanelVisible(true)
+
         let screen = sourceScreen ?? activeScreen()
         let finalFrame = frame(on: screen)
         let closedNotchSize = closedNotchSize(on: screen)
@@ -160,6 +162,7 @@ final class NotchPanelController {
 
             panel.orderOut(nil)
             panel.alphaValue = 1
+            self.animationModel.setPanelVisible(false)
             self.pendingOrderOut = nil
             self.stopKeyEventMonitor()
             self.stopScrollEventMonitor()
@@ -457,6 +460,7 @@ final class NotchPanelController {
                 model: hoverModel,
                 appearanceSettings: appearanceSettings,
                 processor: .shared,
+                notchModel: animationModel,
                 notchSize: closedNotchSize(on: screen),
                 size: activationPanelSize,
                 usesTopEdgeLine: shouldHideClosedNotch(on: screen)
@@ -921,12 +925,17 @@ final class NotchAnimationModel: ObservableObject {
     @Published private(set) var isContentMounted = false
     @Published private(set) var isContentPresented = false
     @Published private(set) var transitionGlowStrength: CGFloat = 0
+    @Published private(set) var isPanelVisible = false
     @Published var captureDraft = ""
     @Published var selectedPage: NotchPage = .capture
     @Published private(set) var hideClosedNotch = true
     @Published private(set) var closedNotchSize = CGSize(width: 185, height: 32)
     private var pendingContentUnmount: DispatchWorkItem?
     private var pendingOpeningGlowFade: DispatchWorkItem?
+
+    func setPanelVisible(_ isPanelVisible: Bool) {
+        self.isPanelVisible = isPanelVisible
+    }
 
     func prepareForPresentation(hideClosedNotch: Bool, closedNotchSize: CGSize) {
         pendingContentUnmount?.cancel()
