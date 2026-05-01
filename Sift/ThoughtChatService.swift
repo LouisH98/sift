@@ -895,11 +895,11 @@ private struct OpenAIResponsesAgentClient {
                 onTextDelta: onTextDelta
             )
         } catch {
-            guard mode == .stored, isZeroDataRetentionPreviousResponseError(error) else {
+            guard mode == .stored, OpenAIResponsesZDRCompatibility.requiresStatelessRetry(error) else {
                 throw error
             }
 
-            debugChatStream("responses previous_response rejected by ZDR; retrying stateless")
+            debugChatStream("responses stored request rejected by ZDR/store policy; retrying stateless")
             Self.statelessProviderKeys.insert(providerKey)
             return try await run(
                 question: question,
@@ -1307,18 +1307,6 @@ private struct OpenAIResponsesAgentClient {
         ].joined(separator: "|")
     }
 
-    private func isZeroDataRetentionPreviousResponseError(_ error: Error) -> Bool {
-        guard case let OpenAIClientError.apiError(message) = error else {
-            return false
-        }
-
-        let lowercased = message.lowercased()
-        return lowercased.contains("previous_response_id")
-            && (lowercased.contains("store")
-                || lowercased.contains("zero data retention")
-                || lowercased.contains("unsupported"))
-    }
-
     private func apiErrorMessage(from data: Data) -> String? {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return String(data: data, encoding: .utf8)
@@ -1338,6 +1326,41 @@ private struct OpenAIResponsesAgentClient {
             }
             sources.append(source)
         }
+    }
+}
+
+enum OpenAIResponsesZDRCompatibility {
+    static func requiresStatelessRetry(_ error: Error) -> Bool {
+        let message: String
+        if case OpenAIClientError.apiError(let apiMessage) = error {
+            message = apiMessage
+        } else {
+            message = error.localizedDescription
+        }
+
+        return requiresStatelessRetry(message: message)
+    }
+
+    static func requiresStatelessRetry(message: String) -> Bool {
+        let normalized = message.lowercased()
+        let mentionsPreviousResponse = normalized.contains("previous_response_id")
+            || normalized.contains("previous response")
+        let mentionsStore = normalized.contains("store")
+            || normalized.contains("stored")
+
+        if normalized.contains("zero data retention") {
+            return true
+        }
+
+        if mentionsPreviousResponse && (mentionsStore || normalized.contains("unsupported")) {
+            return true
+        }
+
+        return mentionsStore
+            && (normalized.contains("must be false")
+                || normalized.contains("set store to false")
+                || normalized.contains("store=false")
+                || normalized.contains("store false"))
     }
 }
 

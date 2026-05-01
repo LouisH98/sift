@@ -27,4 +27,22 @@ final class ThoughtChatPrivacyConfigurationTests: XCTestCase {
         XCTAssertTrue(enabledInstruction.contains("explicitly asks"))
         XCTAssertTrue(enabledInstruction.contains("private"))
     }
+
+    func testZDRStoreRejectionTriggersStatelessRetry() {
+        XCTAssertTrue(OpenAIResponsesZDRCompatibility.requiresStatelessRetry(
+            message: "This organization has Zero Data Retention enabled. Set store to false."
+        ))
+    }
+
+    func testPreviousResponseStoreRejectionTriggersStatelessRetry() {
+        XCTAssertTrue(OpenAIResponsesZDRCompatibility.requiresStatelessRetry(
+            message: "The previous_response_id parameter is unsupported when store is false."
+        ))
+    }
+
+    func testUnrelatedAPIErrorDoesNotTriggerStatelessRetry() {
+        XCTAssertFalse(OpenAIResponsesZDRCompatibility.requiresStatelessRetry(
+            message: "The model field is required."
+        ))
+    }
 }
