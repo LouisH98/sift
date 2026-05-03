@@ -47,11 +47,16 @@ final class NotchActivationHoverModel: ObservableObject {
         }
     }
 
+    func commitOpeningHandoff() {
+        isHovered = true
+        isPressed = true
+        proximity = 1
+        activationProgress = 1
+    }
+
     func updateActivationProgress(_ progress: CGFloat) {
-        withAnimation(.smooth(duration: 0.14)) {
-            activationProgress = max(0, min(1, progress))
-            isPressed = activationProgress > 0.01
-        }
+        activationProgress = max(0, min(1, progress))
+        isPressed = activationProgress > 0.01
     }
 
     static func smoothProximity(_ proximity: CGFloat) -> CGFloat {
@@ -129,10 +134,16 @@ struct NotchActivationView: View {
         NotchActivationHoverModel.smoothProximity(model.activationProgress)
     }
 
+    private var thresholdReadiness: CGFloat {
+        let armedProgress = (model.activationProgress - 0.72) / 0.28
+
+        return NotchActivationHoverModel.smoothProximity(armedProgress)
+    }
+
     private var feedbackSize: CGSize {
         CGSize(
-            width: activationSize.width + (feedbackProgress * (usesTopEdgeLine ? 82 : 22)),
-            height: activationSize.height + (feedbackProgress * (usesTopEdgeLine ? 20 : 9))
+            width: activationSize.width + (feedbackProgress * (usesTopEdgeLine ? 72 : 18)) + (thresholdReadiness * (usesTopEdgeLine ? 18 : 8)),
+            height: activationSize.height + (feedbackProgress * (usesTopEdgeLine ? 16 : 7)) + (thresholdReadiness * (usesTopEdgeLine ? 6 : 4))
         )
     }
 
@@ -149,7 +160,7 @@ struct NotchActivationView: View {
             return .smooth(duration: NotchProcessingGlowFade.duration)
         }
 
-        return .smooth(duration: 0.08)
+        return nil
     }
 
     var body: some View {
@@ -175,6 +186,11 @@ struct NotchActivationView: View {
                     notchSurface
                         .allowsHitTesting(false)
                 }
+
+                if !isProcessingGlowActive && model.activationProgress > 0.02 {
+                    activationThresholdCue
+                        .allowsHitTesting(false)
+                }
             }
         }
         .frame(width: size.width, height: size.height)
@@ -198,10 +214,49 @@ struct NotchActivationView: View {
         )
             .opacity(strength > 0.01 ? 1 : 0)
             .animation(glowStrengthAnimation, value: strength)
-            .animation(.smooth(duration: 0.14), value: feedbackSize.width)
-            .animation(.smooth(duration: 0.14), value: feedbackSize.height)
             .animation(.smooth(duration: NotchProcessingGlowFade.duration), value: isDistilling)
             .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private var activationThresholdCue: some View {
+        let strokeOpacity = 0.14 + (thresholdReadiness * 0.7)
+        let strokeWidth = 1 + (thresholdReadiness * 1.2)
+        let glowOpacity = thresholdReadiness * 0.38
+
+        if usesTopEdgeLine {
+            Capsule()
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.42, green: 0.78, blue: 1.0).opacity(strokeOpacity),
+                            .white.opacity(strokeOpacity),
+                            Color(red: 0.72, green: 0.42, blue: 1.0).opacity(strokeOpacity)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    lineWidth: strokeWidth
+                )
+                .frame(width: feedbackSize.width, height: max(4, feedbackSize.height))
+                .shadow(color: appearanceSettings.glowColor.opacity(glowOpacity), radius: 8 + (thresholdReadiness * 8), x: 0, y: 3)
+        } else {
+            NotchShape(topCornerRadius: 6, bottomCornerRadius: 14)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.42, green: 0.78, blue: 1.0).opacity(strokeOpacity),
+                            .white.opacity(strokeOpacity),
+                            Color(red: 0.72, green: 0.42, blue: 1.0).opacity(strokeOpacity)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    lineWidth: strokeWidth
+                )
+                .frame(width: feedbackSize.width, height: feedbackSize.height)
+                .shadow(color: appearanceSettings.glowColor.opacity(glowOpacity), radius: 8 + (thresholdReadiness * 8), x: 0, y: 7)
+        }
     }
 
     private func updateProcessingFade(isDistilling: Bool) {
@@ -234,7 +289,6 @@ struct NotchActivationView: View {
                 .frame(width: feedbackSize.width, height: feedbackSize.height)
                 .animation(.smooth(duration: 0.12), value: model.isHovered)
                 .animation(.smooth(duration: 0.08), value: model.isPressed)
-                .animation(.smooth(duration: 0.14), value: model.activationProgress)
                 .animation(.smooth(duration: 1.15), value: processor.notchProcessingState.isDistilling)
         } else {
             NotchShape(topCornerRadius: 6, bottomCornerRadius: 14)
@@ -259,7 +313,6 @@ struct NotchActivationView: View {
                 )
                 .animation(.smooth(duration: 0.12), value: model.isHovered)
                 .animation(.smooth(duration: 0.08), value: model.isPressed)
-                .animation(.smooth(duration: 0.14), value: model.activationProgress)
                 .animation(.smooth(duration: 1.15), value: processor.notchProcessingState.isDistilling)
         }
     }

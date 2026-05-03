@@ -28,10 +28,14 @@ final class NotchPanelController {
     private var screenParametersObserver: NSObjectProtocol?
     private var accumulatedHorizontalScroll: CGFloat = 0
     private var didPageDuringCurrentScrollGesture = false
-    private var accumulatedTopEdgePush: CGFloat = 0
+    private var topEdgePushPressure: CGFloat = 0
     private var displayedTopEdgePushProgress: CGFloat = 0
     private var topEdgePushBeganAt: Date?
     private var lastTopEdgePushEventAt: Date?
+    private var lastTopEdgePushPressureUpdateAt: Date?
+    private var lastDisplayedTopEdgePushProgressUpdateAt: Date?
+    private var topEdgePushDecayWorkItem: DispatchWorkItem?
+    private var topEdgePushScreen: NSScreen?
     private var lastActivationClickAt = Date.distantPast
     private var lastTopEdgePushAt = Date.distantPast
 
@@ -41,9 +45,17 @@ final class NotchPanelController {
     private let activationPanelSize = NSSize(width: 980, height: 220)
     private let fallbackClosedNotchSize = NSSize(width: 185, height: 32)
     private let topEdgePushThreshold: CGFloat = 68
-    private let topEdgePushMaximumGap: TimeInterval = 0.24
     private let topEdgePushMinimumDuration: TimeInterval = 0.18
     private let topEdgeIntentionalBandHeight: CGFloat = 4
+    private let topEdgePushMinimumDelta: CGFloat = 0.35
+    private let topEdgePushPassiveLeakRate: CGFloat = 72
+    private let topEdgePushPassiveLeakDelay: TimeInterval = 0.18
+    private let topEdgePushPassiveLeakRampDuration: TimeInterval = 0.24
+    private let topEdgePushCancelLeakRate: CGFloat = 220
+    private let topEdgePushPullDownMinimumDelta: CGFloat = 1.6
+    private let topEdgePushPullDownMultiplier: CGFloat = 1.25
+    private let topEdgePushDecayInterval: TimeInterval = 1 / 120
+    private let topEdgePushVisualChargeDuration: TimeInterval = 0.14
     private let shortcutModifierMask = NSEvent.ModifierFlags([.command, .option, .control, .shift])
 
     init(store: ThoughtStore) {
@@ -317,48 +329,67 @@ final class NotchPanelController {
     }
 
     private func handleTopEdgePush(at mouseLocation: NSPoint, deltaX: CGFloat, deltaY: CGFloat) {
+        let now = Date()
+
         guard let screen = topEdgePushScreen(at: mouseLocation) else {
-            resetTopEdgePush()
+            deflateTopEdgePush(rate: topEdgePushCancelLeakRate, at: now)
             return
         }
 
         guard mouseLocation.y >= screen.frame.maxY - topEdgeIntentionalBandHeight else {
-            resetTopEdgePush()
+            deflateTopEdgePush(rate: topEdgePushCancelLeakRate, at: now)
             return
         }
 
-        let verticalPressure = abs(deltaY)
-        guard verticalPressure > abs(deltaX) * 1.35, verticalPressure > 0.2 else {
-            if abs(deltaX) > 0.2 || verticalPressure > 0.2 {
-                resetTopEdgePush()
+        topEdgePushScreen = screen
+
+        let upwardPush = max(0, -deltaY)
+        let downwardPull = max(0, deltaY)
+        let isUpwardPush = upwardPush > topEdgePushMinimumDelta
+        let pullDownMinimum = topEdgePushPressure > 0 ? topEdgePushPullDownMinimumDelta : topEdgePushMinimumDelta
+        let isDownwardPull = downwardPull > pullDownMinimum
+
+        guard isUpwardPush else {
+            if isDownwardPull {
+                topEdgePushPressure = max(0, topEdgePushPressure - (downwardPull * topEdgePushPullDownMultiplier))
+                lastTopEdgePushPressureUpdateAt = now
+                updateTopEdgePushProgress(on: screen, at: now)
+            } else if topEdgePushPressure > 0 {
+                lastTopEdgePushEventAt = now
+                lastTopEdgePushPressureUpdateAt = now
             }
+
+            scheduleTopEdgePushDecayIfNeeded()
             return
         }
 
-        let now = Date()
-        if let lastTopEdgePushEventAt, now.timeIntervalSince(lastTopEdgePushEventAt) > topEdgePushMaximumGap {
-            resetTopEdgePush()
-        }
-
-        if topEdgePushBeganAt == nil {
+        if topEdgePushBeganAt == nil || topEdgePushPressure <= 0.01 {
             topEdgePushBeganAt = now
         }
         lastTopEdgePushEventAt = now
-        accumulatedTopEdgePush += verticalPressure
-        updateTopEdgePushProgress(on: screen)
+        lastTopEdgePushPressureUpdateAt = now
+        topEdgePushPressure = min(topEdgePushThreshold, topEdgePushPressure + upwardPush)
+        updateTopEdgePushProgress(on: screen, at: now)
+        scheduleTopEdgePushDecayIfNeeded()
 
+        _ = openTopEdgePushIfReady(on: screen, at: now)
+    }
+
+    private func openTopEdgePushIfReady(on screen: NSScreen, at now: Date) -> Bool {
         guard
             let topEdgePushBeganAt,
-            accumulatedTopEdgePush >= topEdgePushThreshold,
+            topEdgePushPressure >= topEdgePushThreshold,
             now.timeIntervalSince(topEdgePushBeganAt) >= topEdgePushMinimumDuration,
             now.timeIntervalSince(lastTopEdgePushAt) > 0.45,
             now.timeIntervalSince(lastActivationClickAt) > 0.24
         else {
-            return
+            return false
         }
 
         lastTopEdgePushAt = now
         openFromMouseActivation(on: screen, at: now)
+
+        return true
     }
 
     private func openFromMouseActivation(on screen: NSScreen, at date: Date = Date()) {
@@ -371,23 +402,136 @@ final class NotchPanelController {
             .first(where: { $0.screen == screen })?
             .model
             .glowStrengthForTransition ?? 0
-        resetTopEdgePush()
-        endActivationHover()
+
+        let activationSurface = activationSurfaces.first(where: { $0.screen == screen })
+        activationSurface?.model.commitOpeningHandoff()
+        resetTopEdgePush(clearsActivationProgress: false)
         show(on: screen, activationGlowStrength: max(activationGlowStrength, 0.74))
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [weak self] in
+            self?.endActivationHover()
+        }
     }
 
-    private func updateTopEdgePushProgress(on screen: NSScreen) {
-        let progress = min(1, accumulatedTopEdgePush / topEdgePushThreshold)
-        displayedTopEdgePushProgress += (progress - displayedTopEdgePushProgress) * 0.38
+    private func updateTopEdgePushProgress(on screen: NSScreen, at now: Date = Date()) {
+        let targetProgress = min(1, topEdgePushPressure / topEdgePushThreshold)
 
-        if progress >= 1 {
-            displayedTopEdgePushProgress = 1
+        if targetProgress <= 0.001 {
+            displayedTopEdgePushProgress = 0
+        } else if targetProgress > displayedTopEdgePushProgress {
+            let elapsed = lastDisplayedTopEdgePushProgressUpdateAt
+                .map { max(0, now.timeIntervalSince($0)) }
+                ?? topEdgePushDecayInterval
+            let maximumStep = CGFloat(elapsed / topEdgePushVisualChargeDuration)
+            displayedTopEdgePushProgress = min(targetProgress, displayedTopEdgePushProgress + maximumStep)
+        } else {
+            displayedTopEdgePushProgress = targetProgress
         }
+
+        lastDisplayedTopEdgePushProgressUpdateAt = now
 
         activationSurfaces
             .first(where: { $0.screen == screen })?
             .model
             .updateActivationProgress(displayedTopEdgePushProgress)
+    }
+
+    private func applyTopEdgePushDecay(until now: Date = Date(), rate: CGFloat? = nil) {
+        defer {
+            lastTopEdgePushPressureUpdateAt = now
+        }
+
+        guard topEdgePushPressure > 0, let lastTopEdgePushPressureUpdateAt else {
+            return
+        }
+
+        let elapsed = max(0, now.timeIntervalSince(lastTopEdgePushPressureUpdateAt))
+        guard elapsed > 0 else {
+            return
+        }
+
+        let decayRate = rate ?? passiveTopEdgePushLeakRate(at: now)
+        guard decayRate > 0 else {
+            return
+        }
+
+        topEdgePushPressure = max(0, topEdgePushPressure - CGFloat(elapsed) * decayRate)
+
+        if topEdgePushPressure <= 0.001 {
+            topEdgePushPressure = 0
+            topEdgePushBeganAt = nil
+            lastTopEdgePushEventAt = nil
+        }
+    }
+
+    private func passiveTopEdgePushLeakRate(at now: Date) -> CGFloat {
+        guard let lastTopEdgePushEventAt else {
+            return topEdgePushPassiveLeakRate
+        }
+
+        let timeSincePush = now.timeIntervalSince(lastTopEdgePushEventAt)
+        guard timeSincePush > topEdgePushPassiveLeakDelay else {
+            return 0
+        }
+
+        let rampProgress = CGFloat((timeSincePush - topEdgePushPassiveLeakDelay) / topEdgePushPassiveLeakRampDuration)
+        let easedRamp = NotchActivationHoverModel.smoothProximity(rampProgress)
+
+        return topEdgePushPassiveLeakRate * easedRamp
+    }
+
+    private func deflateTopEdgePush(rate: CGFloat, at now: Date = Date()) {
+        applyTopEdgePushDecay(until: now, rate: rate)
+
+        if let topEdgePushScreen {
+            updateTopEdgePushProgress(on: topEdgePushScreen, at: now)
+        } else {
+            activationSurfaces.forEach { $0.model.updateActivationProgress(0) }
+        }
+
+        scheduleTopEdgePushDecayIfNeeded()
+    }
+
+    private func scheduleTopEdgePushDecayIfNeeded() {
+        topEdgePushDecayWorkItem?.cancel()
+        topEdgePushDecayWorkItem = nil
+
+        guard topEdgePushPressure > 0, !targetIsOpen else {
+            return
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.tickTopEdgePushDecay()
+            }
+        }
+        topEdgePushDecayWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + topEdgePushDecayInterval, execute: workItem)
+    }
+
+    private func tickTopEdgePushDecay() {
+        let now = Date()
+        topEdgePushDecayWorkItem = nil
+
+        if let topEdgePushScreen, openTopEdgePushIfReady(on: topEdgePushScreen, at: now) {
+            return
+        }
+
+        applyTopEdgePushDecay(until: now)
+
+        if let topEdgePushScreen {
+            updateTopEdgePushProgress(on: topEdgePushScreen, at: now)
+
+            if openTopEdgePushIfReady(on: topEdgePushScreen, at: now) {
+                return
+            }
+        }
+
+        if topEdgePushPressure > 0 {
+            scheduleTopEdgePushDecayIfNeeded()
+        } else {
+            resetTopEdgePush()
+        }
     }
 
     private func updateActivationHover(at mouseLocation: NSPoint) {
@@ -424,12 +568,20 @@ final class NotchPanelController {
         activationSurfaces.forEach { $0.model.endHover() }
     }
 
-    private func resetTopEdgePush() {
-        accumulatedTopEdgePush = 0
+    private func resetTopEdgePush(clearsActivationProgress: Bool = true) {
+        topEdgePushDecayWorkItem?.cancel()
+        topEdgePushDecayWorkItem = nil
+        topEdgePushPressure = 0
         displayedTopEdgePushProgress = 0
         topEdgePushBeganAt = nil
         lastTopEdgePushEventAt = nil
-        activationSurfaces.forEach { $0.model.updateActivationProgress(0) }
+        lastTopEdgePushPressureUpdateAt = nil
+        lastDisplayedTopEdgePushProgressUpdateAt = nil
+        topEdgePushScreen = nil
+
+        if clearsActivationProgress {
+            activationSurfaces.forEach { $0.model.updateActivationProgress(0) }
+        }
     }
 
     private func makeActivationPanel(on screen: NSScreen) -> ActivationSurface {

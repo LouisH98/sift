@@ -214,11 +214,11 @@ struct NotchView: View {
                         }
                 }
                 .shadow(color: .black.opacity(model.isOpen ? 0.7 : 0), radius: model.isOpen ? 9 : 0, x: 0, y: 6)
-                .opacity(notchShellOpacity)
                 .blur(radius: paneBlurRadius)
                 .animation(model.isOpen ? NotchAnimationModel.openAnimation : NotchAnimationModel.closeAnimation, value: model.isOpen)
                 .animation(NotchAnimationModel.blurAnimation, value: model.isBlurred)
                 .animation(NotchAnimationModel.pageResizeAnimation, value: currentSize.height)
+                .opacity(notchShellOpacity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
