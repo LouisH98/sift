@@ -292,6 +292,14 @@ enum NotchProcessingGlowFade {
     }
 }
 
+enum NotchGlowClock {
+    private static let startedAt = CACurrentMediaTime()
+
+    static var seconds: TimeInterval {
+        CACurrentMediaTime() - startedAt
+    }
+}
+
 enum NotchGlowShape: Float {
     case notch = 0
     case topEdgeLine = 1
@@ -354,10 +362,10 @@ struct NotchGlowField: View, Animatable {
     var body: some View {
         if colorMotion > 0.001 {
             TimelineView(.animation(minimumInterval: 1 / 120)) { timeline in
-                metalView(renderTime: timeline.date.timeIntervalSinceReferenceDate)
+                metalView(renderTime: NotchGlowClock.seconds)
             }
         } else {
-            metalView(renderTime: CACurrentMediaTime())
+            metalView(renderTime: NotchGlowClock.seconds)
         }
     }
 
@@ -553,7 +561,7 @@ final class NotchGlowRenderView: NSView {
                 Float(bounds.width) * scale,
                 Float(bounds.height) * scale,
                 Float(strength),
-                Float(renderTime.truncatingRemainder(dividingBy: 120))
+                Float(renderTime)
             ),
             notchGain: SIMD4(
                 Float(notchSize.width) * scale,

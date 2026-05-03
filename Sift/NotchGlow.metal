@@ -357,12 +357,47 @@ static float4 topEdgeLineGlowSample(
         * exp(-pow((position.y - topY) / 2.1, 2.0))
         * 0.82;
     float colorMotion = clamp(colorMotionInput, 0.0, 1.0);
-    float rayDistance = (position.y - topY) / max(tabHeight, 1.0);
-    float primaryRay = pow(clamp(0.5 + (0.5 * sin((normalizedX * 8.8) + (rayDistance * 1.25) - (time * 1.75))), 0.0, 1.0), 2.7);
-    float secondaryRay = pow(clamp(0.5 + (0.5 * sin((normalizedX * 13.5) - (rayDistance * 0.64) + (time * 2.18))), 0.0, 1.0), 3.4);
-    float rayPattern = clamp((primaryRay * 0.72) + (secondaryRay * 0.38), 0.0, 1.0);
-    float rayReach = exp(-max(position.y - topY, 0.0) / 68.0) * smoothstep(topY - 1.0, topY + 18.0, position.y);
-    float shaftModulation = mix(1.0, 0.66 + (rayPattern * rayReach * 0.48), colorMotion);
+    float yBelowSource = max(position.y - (topY + tabHeight * 0.18), 0.0);
+    float spread = smoothstep(4.0, 86.0, yBelowSource);
+    float yTravel = yBelowSource / max(halfLine, 1.0);
+    float fanScale = 1.0 + (yBelowSource * 0.0064);
+    float arcBend = normalizedX * abs(normalizedX) * spread * 0.16;
+    float sourcePhase = (normalizedX - arcBend) / fanScale;
+    float arcPhase = asin(clamp(sourcePhase, -0.98, 0.98)) / 1.22;
+    float slowSweep = sin(time * 0.18) * 0.055;
+    float rayWidthA = mix(0.07, 0.17, spread);
+    float rayWidthB = mix(0.048, 0.13, spread);
+    float rayWidthC = mix(0.062, 0.15, spread);
+    float rayWidthD = mix(0.042, 0.11, spread);
+    float rayWidthE = mix(0.082, 0.19, spread);
+    float rayWidthF = mix(0.052, 0.14, spread);
+    float rayCenterA = -0.84 + slowSweep + (sin(time * 0.23) * 0.022) + (yTravel * -0.22);
+    float rayCenterB = -0.52 + slowSweep - (sin(time * 0.31) * 0.018) + (yTravel * -0.08);
+    float rayCenterC = -0.24 + slowSweep + (sin(time * 0.27) * 0.014) + (yTravel * 0.05);
+    float rayCenterD = 0.06 + slowSweep - (sin(time * 0.29) * 0.012) + (yTravel * 0.14);
+    float rayCenterE = 0.34 + slowSweep + (sin(time * 0.25) * 0.02) + (yTravel * 0.24);
+    float rayCenterF = 0.72 + slowSweep - (sin(time * 0.33) * 0.024) + (yTravel * 0.34);
+    float rayGainA = 0.4 + (0.13 * sin(time * 0.42 + 1.1));
+    float rayGainB = 0.75 + (0.18 * sin(time * 0.37 + 2.4));
+    float rayGainC = 0.54 + (0.16 * sin(time * 0.49 + 0.2));
+    float rayGainD = 0.66 + (0.14 * sin(time * 0.39 + 3.7));
+    float rayGainE = 0.58 + (0.18 * sin(time * 0.44 + 4.6));
+    float rayGainF = 0.44 + (0.12 * sin(time * 0.35 + 5.2));
+    float rayA = exp(-pow((arcPhase - rayCenterA) / rayWidthA, 2.0)) * rayGainA;
+    float rayB = exp(-pow((arcPhase - rayCenterB) / rayWidthB, 2.0)) * rayGainB;
+    float rayC = exp(-pow((arcPhase - rayCenterC) / rayWidthC, 2.0)) * rayGainC;
+    float rayD = exp(-pow((arcPhase - rayCenterD) / rayWidthD, 2.0)) * rayGainD;
+    float rayE = exp(-pow((arcPhase - rayCenterE) / rayWidthE, 2.0)) * rayGainE;
+    float rayF = exp(-pow((arcPhase - rayCenterF) / rayWidthF, 2.0)) * rayGainF;
+    float sourceTexture = 0.84
+        + (0.1 * sin((sourcePhase * 11.0) + (time * 0.62)))
+        + (0.06 * sin((sourcePhase * 23.0) - (time * 0.41)));
+    float radialFlicker = 0.9 + (0.1 * sin((yBelowSource * 0.038) - (time * 1.24)));
+    float rayPattern = clamp((rayA + rayB + rayC + rayD + rayE + rayF) * sourceTexture * radialFlicker, 0.0, 1.0);
+    float rayReach = smoothstep(topY + 3.0, topY + 28.0, position.y)
+        * exp(-yBelowSource / 82.0)
+        * exp(-pow(abs(normalizedX) / 1.16, 4.0));
+    float shaftModulation = mix(1.0, 0.72 + (rayPattern * rayReach * 0.52), colorMotion);
     float energy = (innerFill + rimCore + bloom + halo + wash + lipHighlight) * horizontalTaper * downwardMask * breath * shaftModulation;
     float alpha = clamp(energy * strength, 0.0, 0.92);
 
